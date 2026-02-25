@@ -1,0 +1,350 @@
+<html data-critters-container="" lang="en" class="flex">
+
+<head>
+  <meta charset="utf-8">
+  <meta content="IE=edge,chrome=1" http-equiv="X-UA-Compatible">
+  <meta content="width=device-width,initial-scale=1,maximum-scale=2,user-scalable=yes" name="viewport">
+  <title>Standard Article Report (R0001) - Power BI Report Server</title>
+  <base href="/Reports/">
+  <script>window['___portalRelativeUrl'] = document.querySelector('base').href;</script>
+  <meta content="width=device-width, initial-scale=1" name="viewport">
+
+  <script type="text/javascript">
+    // Fix for IE10 not supporting location.origin
+    // IE 10
+    // 'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Trident/6.0)';
+    if (navigator.userAgent.indexOf('MSIE ') > 0 && !window.location.origin) {
+      window.location.origin = window.location.protocol + '//' + window.location.hostname + (window.location.port ? ':' + window.location.port : '');
+    }
+  </script>
+
+  <!--Favicon Related elements-->
+  <meta content="#eaeaea" name="msapplication-TileColor">
+  <link href="assets/img/fi/pbirs/favicon.ico" rel="shortcut icon">
+  <link href="assets/img/fi/pbirs/favicon.ico" rel="icon">
+  <script>
+    window['__dynamicHeadTags'] = [
+      {tag: 'link', rel: 'apple-touch-icon', sizes: '57x57', href: 'apple-icon-57x57.png'},
+      {tag: 'link', rel: 'apple-touch-icon', sizes: '114x114', href: 'apple-icon-114x114.png'},
+      {tag: 'link', rel: 'apple-touch-icon', sizes: '72x72', href: 'apple-icon-72x72.png'},
+      {tag: 'link', rel: 'apple-touch-icon', sizes: '144x144', href: 'apple-icon-144x144.png'},
+      {tag: 'link', rel: 'apple-touch-icon', sizes: '60x60', href: 'apple-icon-60x60.png'},
+      {tag: 'link', rel: 'apple-touch-icon', sizes: '120x120', href: 'apple-icon-120x120.png'},
+      {tag: 'link', rel: 'apple-touch-icon', sizes: '76x76', href: 'apple-icon-76x76.png'},
+      {tag: 'link', rel: 'apple-touch-icon', sizes: '152x152', href: 'apple-icon-152x152.png'},
+      {tag: 'link', rel: 'apple-touch-icon', sizes: '180x180', href: 'apple-icon-180x180.png'},
+      {tag: 'link', rel: 'icon', type: 'image/png', sizes: '192x192', href: 'android-icon-192x192.png'},
+      {tag: 'link', rel: 'icon', type: 'image/png', sizes: '32x32', href: 'favicon-32x32.png'},
+      {tag: 'link', rel: 'icon', type: 'image/png', sizes: '96x96', href: 'favicon-96x96.png'},
+      {tag: 'link', rel: 'icon', type: 'image/png', sizes: '16x16', href: 'favicon-16x16.png'},
+      {tag: 'link', rel: 'manifest', crossorigin: 'use-credentials', href: 'manifest.json'},
+      {tag: 'meta', name: 'msapplication-TileImage', content: 'ms-icon-144x144.png'},
+      {tag: 'meta', name: 'msapplication-config', content: 'browserconfig.xml'}
+    ];
+  </script>
+  <!--End of Favicon Related elements-->
+  <style>
+    :root {
+      --blue: #007bff;
+      --indigo: #6610f2;
+      --purple: #6f42c1;
+      --pink: #e83e8c;
+      --red: #dc3545;
+      --orange: #fd7e14;
+      --yellow: #ffc107;
+      --green: #28a745;
+      --teal: #20c997;
+      --cyan: #17a2b8;
+      --white: #fff;
+      --gray: #6c757d;
+      --gray-dark: #343a40;
+      --primary: #007bff;
+      --secondary: #6c757d;
+      --success: #28a745;
+      --info: #17a2b8;
+      --warning: #ffc107;
+      --danger: #dc3545;
+      --light: #f8f9fa;
+      --dark: #343a40;
+      --breakpoint-xs: 0;
+      --breakpoint-sm: 576px;
+      --breakpoint-md: 768px;
+      --breakpoint-lg: 992px;
+      --breakpoint-xl: 1200px;
+      --font-family-sans-serif: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+      --font-family-monospace: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace
+    }
+
+    *,
+    :after,
+    :before {
+      box-sizing: border-box
+    }
+
+    html {
+      font-family: sans-serif;
+      line-height: 1.15;
+      -webkit-text-size-adjust: 100%;
+      -webkit-tap-highlight-color: transparent
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica Neue, Arial, Noto Sans, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", Segoe UI Symbol, "Noto Color Emoji";
+      font-size: 1rem;
+      font-weight: 400;
+      line-height: 1.5;
+      color: #212529;
+      text-align: left;
+      background-color: #fff
+    }
+
+    @media print {
+
+      *,
+      :after,
+      :before {
+        text-shadow: none !important;
+        box-shadow: none !important
+      }
+
+      @page {
+        size: a3
+      }
+
+      body {
+        min-width: 992px !important
+      }
+    }
+
+    @charset "UTF-8";
+
+    html {
+      font-size: 12px
+    }
+
+    html {
+      font-family: sans-serif;
+      -webkit-text-size-adjust: 100%;
+      -ms-text-size-adjust: 100%
+    }
+
+    body {
+      margin: 0
+    }
+
+    @media print {
+
+      *,
+      *:before,
+      *:after {
+        color: #000 !important;
+        text-shadow: none !important;
+        background: transparent !important;
+        box-shadow: none !important
+      }
+    }
+
+    * {
+      box-sizing: border-box
+    }
+
+    *:before,
+    *:after {
+      box-sizing: border-box
+    }
+
+    html {
+      font-size: 10px;
+      -webkit-tap-highlight-color: rgba(0, 0, 0, 0)
+    }
+
+    body {
+      font-family: Helvetica Neue, Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.42857143;
+      color: #333;
+      background-color: #fff
+    }
+  </style>
+  <link rel="stylesheet" href="assets/styles.e5b0302ee3a16131.css" media="all" onload="this.media='all'"><noscript>
+    <link rel="stylesheet" href="assets/styles.e5b0302ee3a16131.css">
+  </noscript>
+  <link rel="stylesheet" href="assets/css/bundle_style.css">
+  <link rel="stylesheet" href="assets/css/bundle_mobile.css">
+  <link rel="stylesheet" href="assets/css/bundle_brand.css">
+  <link href="assets/img/fi/pbirs/apple-icon-57x57.png" rel="apple-touch-icon" sizes="57x57">
+  <link href="assets/img/fi/pbirs/apple-icon-114x114.png" rel="apple-touch-icon" sizes="114x114">
+  <link href="assets/img/fi/pbirs/apple-icon-72x72.png" rel="apple-touch-icon" sizes="72x72">
+  <link href="assets/img/fi/pbirs/apple-icon-144x144.png" rel="apple-touch-icon" sizes="144x144">
+  <link href="assets/img/fi/pbirs/apple-icon-60x60.png" rel="apple-touch-icon" sizes="60x60">
+  <link href="assets/img/fi/pbirs/apple-icon-120x120.png" rel="apple-touch-icon" sizes="120x120">
+  <link href="assets/img/fi/pbirs/apple-icon-76x76.png" rel="apple-touch-icon" sizes="76x76">
+  <link href="assets/img/fi/pbirs/apple-icon-152x152.png" rel="apple-touch-icon" sizes="152x152">
+  <link href="assets/img/fi/pbirs/apple-icon-180x180.png" rel="apple-touch-icon" sizes="180x180">
+  <link href="assets/img/fi/pbirs/android-icon-192x192.png" rel="icon" type="image/png" sizes="192x192">
+  <link href="assets/img/fi/pbirs/favicon-32x32.png" rel="icon" type="image/png" sizes="32x32">
+  <link href="assets/img/fi/pbirs/favicon-96x96.png" rel="icon" type="image/png" sizes="96x96">
+  <link href="assets/img/fi/pbirs/favicon-16x16.png" rel="icon" type="image/png" sizes="16x16">
+  <link href="assets/img/fi/pbirs/manifest.json" rel="manifest" crossorigin="use-credentials">
+  <meta content="assets/img/fi/pbirs/ms-icon-144x144.png" name="msapplication-TileImage">
+  <meta content="assets/img/fi/pbirs/browserconfig.xml" name="msapplication-config">
+</head>
+
+<body class="report" style="">
+  <!-- following dom will be replaced by server when loaded in IE -->
+  <!-- Inject:IE-stub -->
+
+  <div app-main="" id="page" ng-version="17.3.12"><!---->
+    <section id="subnav" class="subnav navbar-fixed-top"><app-subnav>
+        <nav role="navigation" class="toolbar" aria-label="Navigation">
+          <div class="container-fluid">
+            <ul role="list" class="nav navbar-nav underlined-nav">
+              <li class="nav-favs"><a role="button" aria-pressed="false" href="favorites"><span
+                    class="stretcher">Favorites</span><span>Favorites</span></a></li>
+              <li class="nav-browse"><a role="button" aria-pressed="false" class="" href="browse/"><span
+                    class="stretcher">Browse</span><span>Browse</span></a></li>
+            </ul><!----><!---->
+            <ul class="nav"><!---->
+              <li>
+                <ul role="menubar" class="nav toolbar-nav"><!----><!----><!---->
+                  <li ngbdropdown="" placement="bottom-right" role="menuitem"
+                    class="nav-publish hidden-ultracompact dropdown"><a aria-haspopup="true" href="javascript:void(0);"
+                      ngbdropdowntoggle="" role="button" name="menuItemPublish" class="dropdown-toggle" alt="Publish"
+                      aria-label="Publish" aria-expanded="false"><span aria-hidden="true"
+                        class="glyphui glyphui-powerbi"></span><span id="nav-publish-label"
+                        class="text hidden-compact"><span class="extra-space"></span>Publish</span><span
+                        class="extra-space"></span><span class="caret"></span></a><!---->
+                    <ul aria-labelledby="nav-publish-label" ngbdropdownmenu="" role="menu" class="dropdown-menu">
+                      <li ngbdropdownitem="" role="none" class="dropdown-item" tabindex="0"><a
+                          href="javascript:void(0);" role="menuitem"><span>Publish all reports</span></a></li>
+                      <li ngbdropdownitem="" role="none" class="dropdown-item" tabindex="0"><a
+                          href="javascript:void(0);" role="menuitem"><span>Select reports to publish</span></a></li>
+                    </ul>
+                  </li><!----><!----><!---->
+                  <li ngbdropdown="" placement="bottom-right" role="none"
+                    class="nav-display hidden-ultracompact dropdown"><a id="layout-combobox-toggle" aria-haspopup="true"
+                      href="javascript:void(0);" ngbdropdowntoggle="" role="menuitem" class="dropdown-toggle" alt="View"
+                      aria-label="Tiles" aria-expanded="false"><span aria-hidden="true"
+                        class="glyphui glyphui-tilesview"></span><span id="nav-display-label"
+                        class="text hidden-compact"><span class="extra-space"></span>Tiles</span><span
+                        class="extra-space"></span><span class="caret"></span></a><!---->
+                    <ul id="layout-combobox-items-list" aria-labelledby="nav-display-label" ngbdropdownmenu=""
+                      role="menu" class="dropdown-checkboxes dropdown-menu">
+                      <li ngbdropdownitem="" role="none" class="dropdown-item" tabindex="0"><a tabindex="-1"
+                          id="layout-combobox-item-1" href="javascript:void(0);" role="menuitem"
+                          aria-pressed="true"><span aria-hidden="true" class="glyphui glyphui-tilesview"></span><span
+                            class="extra-space"></span><span>Tiles</span></a></li>
+                      <li ngbdropdownitem="" role="none" class="dropdown-item" tabindex="0"><a tabindex="-1"
+                          id="layout-combobox-item-2" href="javascript:void(0);" role="menuitem"
+                          aria-pressed="false"><span aria-hidden="true" class="glyphui glyphui-listview"></span><span
+                            class="extra-space"></span><span>List</span></a></li>
+                      <li ngbdropdownitem="" role="none" class="dropdown-item checkable" tabindex="0"><a
+                          id="layout-combobox-item-3" tabindex="-1" href="javascript:void(0);" role="menuitemcheckbox"
+                          aria-label="Show hidden items" aria-checked="false"><span class="checkbox-toggle"><span
+                              class="glyphui glyphui-empty unchecked"></span><span
+                              class="glyphui glyphui-checkmark checked"></span></span><span
+                            class="extra-space"></span><span>Show hidden items</span></a></li>
+                    </ul>
+                  </li><!----><a aria-expanded="false" aria-haspopup="true" data-target=".ultracompact-subnav-menu"
+                    data-toggle="dropdown" data-display="static" href="javascript:void(0);" role="menuitem"
+                    class="ultracompact-subnav-toggle hidden-normal hidden-compact"><span
+                      class="glyphui glyphui-threebars"></span><span class="sr-only">Toggle navigation</span></a>
+                </ul><!---->
+                <ul role="menubar" class="nav">
+                  <li role="menuitem" class="nav-comments"><a href="javascript:void(0);" role="button"
+                      id="comments-button" alt="Comments" aria-label="Comments"><span aria-hidden="true"
+                        class="glyphui glyphui-comments"></span><span
+                        class="text hidden-compact hidden-ultracompact"><span
+                          class="extra-space"></span>Comments</span></a><!----></li>
+                </ul><!---->
+              </li>
+            </ul>
+            <div id="ultracompact-subnav" class="ultracompact-subnav">
+              <div class="ultracompact-subnav-menu">
+                <ul role="menu" class="dropdown-menu"><!----><!----><!---->
+                  <li role="none" class="nav-publish"><a aria-expanded="false" aria-haspopup="true"
+                      data-target=".ultracompact-subnav-publish" data-toggle="dropdown" data-display="static"
+                      href="javascript:void(0);" role="menuitem" class="dropdown-toggle"><span
+                        class="glyphui glyphui-chevron-right pull-right"></span><span aria-hidden="true"
+                        class="glyphui glyphui-powerbi"></span><span class="extra-space"></span><span>Publish</span></a>
+                  </li><!----><!---->
+                  <li role="none" class="nav-display"><a aria-expanded="false" aria-haspopup="true"
+                      data-target=".ultracompact-subnav-display" data-toggle="dropdown" data-display="static"
+                      href="javascript:void(0);" role="menuitem" class="dropdown-toggle" alt="View"
+                      aria-label="Tiles"><span class="glyphui glyphui-chevron-right pull-right"></span><span
+                        aria-hidden="true" class="glyphui glyphui-tilesview"></span><span id="nav-display-label"
+                        class="text"><span class="extra-space"></span>Tiles</span></a></li><!---->
+                </ul>
+              </div>
+              <div class="ultracompact-subnav-new">
+                <ul role="menu" class="dropdown-menu">
+                  <li role="none" class="mobilenav-back"><a data-target=".ultracompact-subnav-menu"
+                      data-toggle="dropdown" data-display="static" href="javascript:void(0);" role="menuitem"><span
+                        class="glyphui glyphui-chevron-left"></span><span
+                        class="extra-space"></span><span>Back</span></a></li><!----><!----><!----><!----><!----><!---->
+                </ul>
+              </div>
+              <div class="ultracompact-subnav-publish">
+                <ul role="menu" class="dropdown-menu">
+                  <li role="none" class="mobilenav-back"><a data-target=".ultracompact-subnav-menu"
+                      data-toggle="dropdown" data-display="static" href="javascript:void(0);" role="menuitem"><span
+                        class="glyphui glyphui-chevron-left"></span><span
+                        class="extra-space"></span><span>Back</span></a></li>
+                  <li role="none"><a href="javascript:void(0);" role="menuitem"><span>Publish all reports</span></a>
+                  </li>
+                  <li role="none"><a href="javascript:void(0);" role="menuitem"><span>Select reports to
+                        publish</span></a></li>
+                </ul>
+              </div>
+              <div class="ultracompact-subnav-display">
+                <ul role="menu" class="dropdown-menu dropdown-checkboxes">
+                  <li role="none" class="mobilenav-back"><a data-target=".ultracompact-subnav-menu"
+                      data-toggle="dropdown" data-display="static" href="javascript:void(0);" role="menuitem"><span
+                        class="glyphui glyphui-chevron-left"></span><span
+                        class="extra-space"></span><span>Back</span></a></li>
+                  <li role="none"><a tabindex="-1" href="javascript:void(0);" role="menuitem" aria-pressed="true"><span
+                        aria-hidden="true" class="glyphui glyphui-tilesview"></span><span
+                        class="extra-space"></span><span>Tiles</span></a></li>
+                  <li role="none"><a tabindex="-1" href="javascript:void(0);" role="menuitem" aria-pressed="false"><span
+                        aria-hidden="true" class="glyphui glyphui-listview"></span><span
+                        class="extra-space"></span><span>List</span></a></li>
+                  <li role="none" class="checkable"><a tabindex="-1" href="javascript:void(0);" role="menuitemcheckbox"
+                      aria-label="Show hidden items" aria-checked="false"><span class="checkbox-toggle"><span
+                          class="glyphui glyphui-empty unchecked"></span><span
+                          class="glyphui glyphui-checkmark checked"></span></span><span
+                        class="extra-space"></span><span>Show hidden items</span></a></li>
+                </ul>
+              </div>
+            </div><!---->
+          </div>
+        </nav>
+      </app-subnav></section><!---->
+    <section id="main" role="main" tabindex="-1" class="main with-subnav" aria-label="Main content">
+      <div class="view"><router-outlet></router-outlet><app-paginated-report-viewer-page>
+          <div class="viewerContentContainer showChrome"><!---->
+            <div>
+              <div class="frame"><iframe frameborder="0" seamless="seamless" class="viewer" title="Report Viewer"
+                  src="/ReportServer/Pages/ReportViewer.aspx?%2FIS%20Reports%20-%20MRPI%2FRetailer%20Reports%2FData%20-%20Price%20Management%2FStandard%20Article%20Report%20(R0001)&amp;rc:showbackbutton=true"></iframe>
+              </div><!----><!---->
+              <div aria-live="assertive" class="screen-reader-offscreen">Loading finished </div><!----><!---->
+            </div>
+          </div>
+        </app-paginated-report-viewer-page><!----></div>
+    </section>
+  </div>
+
+  <script src="assets/runtime.ded0df392d55dc2c.js" type="module"></script>
+  <script src="assets/polyfills.f98ea595b38a31c6.js" type="module"></script>
+  <script src="assets/main.16d270fca06c5cec.js" type="module"></script>
+
+
+  <div class="popover-wrapper">
+    <div class="popover">
+      <div class="stem"></div>
+      <div class="content" id="content"></div>
+    </div>
+  </div>
+</body>
+
+</html>

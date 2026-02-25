@@ -1,0 +1,34 @@
+{
+  "name": "ssrs-price-costs",
+  "version": "1.0.0",
+  "description": "SSRS session capture with automated dropdown interaction",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "capture": "tsc && node --env-file-if-exists=.env dist/src/index.js",
+    "capture:fresh": "tsc && node --env-file-if-exists=.env dist/src/index.js --fresh-profile",
+    "capture:auto": "tsc && node --env-file-if-exists=.env dist/src/index.js --auto-login",
+    "capture:help": "tsc && node dist/src/index.js --help",
+    "scrape": "tsc && node --env-file-if-exists=.env dist/src/scrape/index.js",
+    "scrape:help": "tsc && node dist/src/scrape/index.js --help",
+    "scrape:all": "tsc && node --env-file-if-exists=.env dist/src/scrape/all.js",
+    "scrape:all:sequential": "tsc && node --env-file-if-exists=.env dist/src/scrape/all.js --sequential",
+    "scrape:all:help": "tsc && node dist/src/scrape/all.js --help"
+  },
+  "keywords": [
+    "ssrs",
+    "session",
+    "capture",
+    "playwright"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.13.2",
+    "playwright-core": "^1.58.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
