@@ -11,6 +11,7 @@ dist/
 
 # Generated outputs
 !outputs/
+!outputs/jobs/
 
 # Browser profiles
 .playwright-profile/

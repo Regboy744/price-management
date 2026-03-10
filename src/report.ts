@@ -6,40 +6,53 @@ import type {
   ReportPageState,
   ReportSurfaceState,
 } from './types.js';
-import { sleep } from './utils.js';
+import {
+  resolveBrowserActionTimeoutMs,
+  sleep,
+  TimedActionError,
+  withTimeout,
+} from './utils.js';
 import { REPORT_CONTENT_MARKERS, VISIBILITY_STATE_SELECTOR } from '../config/report.js';
 import { getHiddenFieldValue, waitForPostbackOrStateChange } from './dom.js';
 
 export async function waitForReportSurface(
   page: Page,
-  timeoutMs: number
+  timeoutMs: number,
+  actionTimeoutMs = 15_000
 ): Promise<ReportSurfaceState | null> {
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
-    const state = await page
-        .evaluate(() => {
-          const currentUrl = window.location.href;
-          const host = window.location.hostname;
-          const normalizedHost = String(host || '').toLowerCase();
-          const isLoginHost =
-            normalizedHost.includes('login.microsoftonline.com') ||
-            normalizedHost.endsWith('.microsoftonline.com') ||
-            normalizedHost === 'login.live.com' ||
-            normalizedHost === 'account.live.com' ||
-            normalizedHost.endsWith('.live.com');
+    const state = await withTimeout(
+      page.evaluate(() => {
+        const currentUrl = window.location.href;
+        const host = window.location.hostname;
+        const normalizedHost = String(host || '').toLowerCase();
+        const isLoginHost =
+          normalizedHost.includes('login.microsoftonline.com') ||
+          normalizedHost.endsWith('.microsoftonline.com') ||
+          normalizedHost === 'login.live.com' ||
+          normalizedHost === 'account.live.com' ||
+          normalizedHost.endsWith('.live.com');
 
-          return {
-            currentUrl,
-            isLoginHost,
-            hasReportForm: Boolean(document.querySelector('form[action*="ReportViewer.aspx"]')),
-            hasReportViewerControl: Boolean(
-              document.querySelector('#ReportViewerControl, [id*="ReportViewerControl"]')
+        return {
+          currentUrl,
+          isLoginHost,
+          hasReportForm: Boolean(document.querySelector('form[action*="ReportViewer.aspx"]')),
+          hasReportViewerControl: Boolean(
+            document.querySelector('#ReportViewerControl, [id*="ReportViewerControl"]')
           ),
           title: document.title || '',
         };
-      })
-      .catch(() => null);
+      }),
+      actionTimeoutMs,
+      () => new TimedActionError('Read report surface state', actionTimeoutMs)
+    ).catch((error) => {
+      if (error instanceof TimedActionError) {
+        throw error;
+      }
+      return null;
+    });
 
     if (
       state &&
@@ -64,7 +77,8 @@ export async function waitForReportPageState(
   options?: {
     requireEanHeader?: boolean;
     requireReportTitle?: boolean;
-  }
+  },
+  actionTimeoutMs = 15_000
 ): Promise<ReportPageState> {
   const start = Date.now();
   const { title, header } = REPORT_CONTENT_MARKERS;
@@ -79,8 +93,8 @@ export async function waitForReportPageState(
   };
 
   while (Date.now() - start < timeoutMs) {
-    const state = await page
-      .evaluate(
+    const state = await withTimeout(
+      page.evaluate(
         ([titleMarker, headerMarker]: [string, string]) => {
           const field = document.querySelector(
             'input[name="ReportViewerControl$ctl09$VisibilityState$ctl00"]'
@@ -119,13 +133,21 @@ export async function waitForReportPageState(
           };
         },
         [title, header] as [string, string]
-      )
-      .catch((): ReportPageState => ({
+      ),
+      actionTimeoutMs,
+      () => new TimedActionError('Read report page state', actionTimeoutMs)
+    ).catch((error): ReportPageState => {
+      if (error instanceof TimedActionError) {
+        throw error;
+      }
+
+      return {
         visibilityState: '',
         pageUrl: '',
         hasReportTitle: false,
         hasEanHeader: false,
-      }));
+      };
+    });
 
     lastState = state;
 
@@ -163,61 +185,73 @@ export async function waitForReportPageState(
 export async function triggerReservedAsyncLoadTarget(
   page: Page,
   getCaptureCount: () => number,
-  timeoutMs: number
+  timeoutMs: number,
+  actionTimeoutMs: number
 ): Promise<string> {
   const beforeCaptureCount = getCaptureCount();
-  const beforeViewState = await getHiddenFieldValue(page, '#__VIEWSTATE');
+  const beforeViewState = await getHiddenFieldValue(page, '#__VIEWSTATE', actionTimeoutMs);
 
-  const triggerOk = await page
-    .evaluate(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if (typeof (globalThis as any).__doPostBack === 'function') {
-        (globalThis as any).__doPostBack(
-          'ReportViewerControl$ctl09$Reserved_AsyncLoadTarget',
-          ''
-        );
-        return true;
-      }
+  let triggerOk = false;
 
-      const eventTarget = document.querySelector(
-        '#__EVENTTARGET, input[name="__EVENTTARGET"]'
-      ) as HTMLInputElement | null;
-      const eventArgument = document.querySelector(
-        '#__EVENTARGUMENT, input[name="__EVENTARGUMENT"]'
-      ) as HTMLInputElement | null;
-      const form = document.querySelector(
-        '#ReportViewerForm, #aspnetForm, form[action*="ReportViewer.aspx"], form'
-      ) as HTMLFormElement | null;
-
-      if (form) {
-        const targetField =
-          eventTarget ||
-          (() => {
-            const input = document.createElement('input');
-            input.type = 'hidden';
-            input.name = '__EVENTTARGET';
-            form.appendChild(input);
-            return input;
-          })();
-
-        targetField.value = 'ReportViewerControl$ctl09$Reserved_AsyncLoadTarget';
-
-        if (eventArgument) {
-          eventArgument.value = '';
+  try {
+    triggerOk = await withTimeout(
+      page.evaluate(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (typeof (globalThis as any).__doPostBack === 'function') {
+          (globalThis as any).__doPostBack(
+            'ReportViewerControl$ctl09$Reserved_AsyncLoadTarget',
+            ''
+          );
+          return true;
         }
 
-        if (typeof form.requestSubmit === 'function') {
-          form.requestSubmit();
-        } else {
-          form.submit();
+        const eventTarget = document.querySelector(
+          '#__EVENTTARGET, input[name="__EVENTTARGET"]'
+        ) as HTMLInputElement | null;
+        const eventArgument = document.querySelector(
+          '#__EVENTARGUMENT, input[name="__EVENTARGUMENT"]'
+        ) as HTMLInputElement | null;
+        const form = document.querySelector(
+          '#ReportViewerForm, #aspnetForm, form[action*="ReportViewer.aspx"], form'
+        ) as HTMLFormElement | null;
+
+        if (form) {
+          const targetField =
+            eventTarget ||
+            (() => {
+              const input = document.createElement('input');
+              input.type = 'hidden';
+              input.name = '__EVENTTARGET';
+              form.appendChild(input);
+              return input;
+            })();
+
+          targetField.value = 'ReportViewerControl$ctl09$Reserved_AsyncLoadTarget';
+
+          if (eventArgument) {
+            eventArgument.value = '';
+          }
+
+          if (typeof form.requestSubmit === 'function') {
+            form.requestSubmit();
+          } else {
+            form.submit();
+          }
+
+          return true;
         }
 
-        return true;
-      }
-
-      return false;
-    })
-    .catch(() => false);
+        return false;
+      }),
+      actionTimeoutMs,
+      () => new TimedActionError('Reserved async postback dispatch', actionTimeoutMs)
+    );
+  } catch (error) {
+    if (error instanceof TimedActionError) {
+      throw error;
+    }
+    triggerOk = false;
+  }
 
   if (!triggerOk) return 'not-triggered';
 
@@ -226,7 +260,8 @@ export async function triggerReservedAsyncLoadTarget(
     beforeCaptureCount,
     getCaptureCount,
     beforeViewState,
-    timeoutMs
+    timeoutMs,
+    actionTimeoutMs
   );
 
   await sleep(150);
@@ -341,6 +376,7 @@ export async function ensurePreferredCapture(
   }
 
   const forcedAsyncResults: string[] = [];
+  const actionTimeoutMs = resolveBrowserActionTimeoutMs(options);
 
   for (let attempt = 1; attempt <= forcedAsyncRetries; attempt++) {
     console.log(
@@ -348,7 +384,12 @@ export async function ensurePreferredCapture(
     );
 
     const asyncTriggerTimeoutMs = Math.max(2_000, options.selectPostbackTimeoutMs);
-    const result = await triggerReservedAsyncLoadTarget(page, getCaptureCount, asyncTriggerTimeoutMs);
+    const result = await triggerReservedAsyncLoadTarget(
+      page,
+      getCaptureCount,
+      asyncTriggerTimeoutMs,
+      actionTimeoutMs
+    );
     forcedAsyncResults.push(result);
     console.log(`Forced reserved async postback result: ${result}`);
 

@@ -1,23 +1,31 @@
 import type { Page, ElementHandle } from 'playwright-core';
 import type { SelectorMatch, SelectedOption, SelectOption } from './types.js';
-import { sleep } from './utils.js';
+import { sleep, TimedActionError, withTimeout } from './utils.js';
 
 export async function findFirstSelector(
   page: Page,
   selectors: string[],
-  timeoutMs: number
+  timeoutMs: number,
+  actionTimeoutMs = 0
 ): Promise<SelectorMatch | null> {
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
     try {
       for (const selector of selectors) {
-        const handle = await page.$(selector);
+        const handle = await withTimeout(
+          page.$(selector),
+          actionTimeoutMs,
+          () => new TimedActionError(`Find selector ${selector}`, actionTimeoutMs)
+        );
         if (handle) {
           return { selector, handle };
         }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TimedActionError) {
+        throw error;
+      }
       // Frame may be detached during navigation (e.g. Entra redirect) — retry
     }
     await sleep(250);
@@ -107,30 +115,51 @@ export async function maybeClickSelector(
   return false;
 }
 
-export async function getHiddenFieldValue(page: Page, selector: string): Promise<string> {
-  return page
-    .$eval(selector, (el) => (el as HTMLInputElement).value || '')
-    .catch(() => '');
+export async function getHiddenFieldValue(
+  page: Page,
+  selector: string,
+  actionTimeoutMs = 0
+): Promise<string> {
+  try {
+    return await withTimeout(
+      page.$eval(selector, (el) => (el as HTMLInputElement).value || ''),
+      actionTimeoutMs,
+      () => new TimedActionError(`Read hidden field ${selector}`, actionTimeoutMs)
+    );
+  } catch (error) {
+    if (error instanceof TimedActionError) {
+      throw error;
+    }
+    return '';
+  }
 }
 
 export async function waitForDropdownEnabled(
   page: Page,
   selector: string,
-  timeoutMs: number
+  timeoutMs: number,
+  actionTimeoutMs = 0
 ): Promise<boolean> {
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
-    const state = await page
-      .$eval(selector, (el) => {
+    const state = await withTimeout(
+      page.$eval(selector, (el) => {
         const select = el as HTMLSelectElement;
         return {
           exists: true,
           disabled: select.disabled,
           optionCount: select.options ? select.options.length : 0,
         };
-      })
-      .catch(() => ({ exists: false, disabled: true, optionCount: 0 }));
+      }),
+      actionTimeoutMs,
+      () => new TimedActionError(`Read dropdown state ${selector}`, actionTimeoutMs)
+    ).catch((error) => {
+      if (error instanceof TimedActionError) {
+        throw error;
+      }
+      return { exists: false, disabled: true, optionCount: 0 };
+    });
 
     if (state.exists && !state.disabled && state.optionCount > 0) {
       return true;
@@ -142,33 +171,59 @@ export async function waitForDropdownEnabled(
   return false;
 }
 
-export async function getSelectOptions(page: Page, selector: string): Promise<SelectOption[]> {
-  return page
-    .$$eval(`${selector} option`, (options) =>
+export async function getSelectOptions(
+  page: Page,
+  selector: string,
+  actionTimeoutMs = 0
+): Promise<SelectOption[]> {
+  try {
+    return await withTimeout(
+      page.$$eval(`${selector} option`, (options) =>
       options.map((opt) => ({
         value: (opt as HTMLOptionElement).value,
         text: (opt.textContent || '').replace(/\s+/g, ' ').trim(),
         selected: (opt as HTMLOptionElement).selected,
       }))
-    )
-    .catch(() => []);
+      ),
+      actionTimeoutMs,
+      () => new TimedActionError(`Read options ${selector}`, actionTimeoutMs)
+    );
+  } catch (error) {
+    if (error instanceof TimedActionError) {
+      throw error;
+    }
+    return [];
+  }
 }
 
-export async function getSelectedOption(page: Page, selector: string): Promise<SelectedOption> {
-  return page
-    .$eval(selector, (el) => {
-      const select = el as HTMLSelectElement;
-      if (!select || select.selectedIndex < 0) {
-        return { value: '', text: '' };
-      }
+export async function getSelectedOption(
+  page: Page,
+  selector: string,
+  actionTimeoutMs = 0
+): Promise<SelectedOption> {
+  try {
+    return await withTimeout(
+      page.$eval(selector, (el) => {
+        const select = el as HTMLSelectElement;
+        if (!select || select.selectedIndex < 0) {
+          return { value: '', text: '' };
+        }
 
-      const selected = select.options[select.selectedIndex];
-      return {
-        value: selected ? selected.value || '' : select.value || '',
-        text: selected ? (selected.textContent || '').replace(/\s+/g, ' ').trim() : '',
-      };
-    })
-    .catch(() => ({ value: '', text: '' }));
+        const selected = select.options[select.selectedIndex];
+        return {
+          value: selected ? selected.value || '' : select.value || '',
+          text: selected ? (selected.textContent || '').replace(/\s+/g, ' ').trim() : '',
+        };
+      }),
+      actionTimeoutMs,
+      () => new TimedActionError(`Read selected option ${selector}`, actionTimeoutMs)
+    );
+  } catch (error) {
+    if (error instanceof TimedActionError) {
+      throw error;
+    }
+    return { value: '', text: '' };
+  }
 }
 
 export async function waitForPostbackOrStateChange(
@@ -176,7 +231,8 @@ export async function waitForPostbackOrStateChange(
   beforeCaptureCount: number,
   getCaptureCount: () => number,
   beforeViewState: string,
-  timeoutMs: number
+  timeoutMs: number,
+  actionTimeoutMs = 0
 ): Promise<string> {
   const start = Date.now();
 
@@ -185,7 +241,7 @@ export async function waitForPostbackOrStateChange(
       return 'network';
     }
 
-    const currentViewState = await getHiddenFieldValue(page, '#__VIEWSTATE');
+    const currentViewState = await getHiddenFieldValue(page, '#__VIEWSTATE', actionTimeoutMs);
     if (beforeViewState && currentViewState && currentViewState !== beforeViewState) {
       return 'viewstate';
     }

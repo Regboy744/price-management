@@ -1,14 +1,9 @@
 import path from 'node:path';
-import readline from 'node:readline';
 import type { CaptureOptions } from './types.js';
 import { envBool } from './utils.js';
 import { DEFAULT_REPORT_URL } from '../config/report.js';
-import dropdownSteps from '../config/dropdowns.js';
-import { launchBrowser, attachNetworkCapture } from './browser.js';
-import { runAutomatedLogin } from './auth.js';
-import { waitForReportSurface, ensurePreferredCapture } from './report.js';
-import { applyDropdownSelections } from './dropdowns.js';
-import { writeText, buildCurlCommand } from './output.js';
+import { createLogger } from './config/logger.js';
+import { runCaptureWorkflow } from './modules/capture/capture-workflow.js';
 
 function parseArgs(argv: string[]): CaptureOptions {
   const envUsername = process.env['MS_USERNAME'] || process.env['AAD_USERNAME'] || '';
@@ -31,6 +26,7 @@ function parseArgs(argv: string[]): CaptureOptions {
     keepSignedIn: envBool(process.env['MS_KEEP_SIGNED_IN'], false),
     applySelects: !envBool(process.env['SKIP_SELECTS'], false),
     selectDelayMs: Number(process.env['SELECT_DELAY_MS'] || 1_000),
+    browserActionTimeoutMs: Number(process.env['BROWSER_ACTION_TIMEOUT_MS'] || 15_000),
     selectPostbackTimeoutMs: Number(process.env['SELECT_POSTBACK_TIMEOUT_MS'] || 6_000),
     freshProfile: true,
     renderTimeoutMs: Number(process.env['REPORT_RENDER_TIMEOUT_MS'] || 180_000),
@@ -64,6 +60,9 @@ function parseArgs(argv: string[]): CaptureOptions {
         break;
       case '--select-delay-ms':
         if (next) { options.selectDelayMs = Number(next); i++; }
+        break;
+      case '--browser-action-timeout-ms':
+        if (next) { options.browserActionTimeoutMs = Number(next); i++; }
         break;
       case '--select-postback-timeout-ms':
         if (next) { options.selectPostbackTimeoutMs = Number(next); i++; }
@@ -130,6 +129,7 @@ function printUsage(): void {
   console.log('  --fresh-profile                         Delete profile before run');
   console.log('  --timeout-ms <ms>                       Headless wait timeout');
   console.log('  --select-delay-ms <ms>                  Delay after each dropdown selection');
+  console.log('  --browser-action-timeout-ms <ms>        Hard timeout for page actions');
   console.log('  --select-postback-timeout-ms <ms>       Wait for dropdown postback');
   console.log('  --render-timeout-ms <ms>                Wait after View Report click');
   console.log('  --post-render-capture-wait-ms <ms>      Extra wait for final network payload');
@@ -147,24 +147,10 @@ function printUsage(): void {
   console.log('  --help                                  Show this help');
   console.log('');
   console.log('Env vars: MS_USERNAME, MS_PASSWORD, MS_KEEP_SIGNED_IN, AUTO_LOGIN,');
-  console.log('  CHROME_PATH, SELECT_DELAY_MS, SELECT_POSTBACK_TIMEOUT_MS,');
+  console.log('  CHROME_PATH, SELECT_DELAY_MS, BROWSER_ACTION_TIMEOUT_MS, SELECT_POSTBACK_TIMEOUT_MS,');
   console.log('  REPORT_RENDER_TIMEOUT_MS, POST_RENDER_CAPTURE_WAIT_MS,');
   console.log('  PREFERRED_CAPTURE_TIMEOUT_MS, FORCED_ASYNC_RETRIES, SKIP_SELECTS,');
   console.log('  CAPTURE_MAX_ITEMS, CAPTURE_MAX_BYTES_MB');
-}
-
-function waitForEnter(promptText: string): Promise<void> {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-
-    rl.question(`${promptText}\n`, () => {
-      rl.close();
-      resolve();
-    });
-  });
 }
 
 async function main(): Promise<void> {
@@ -176,96 +162,43 @@ async function main(): Promise<void> {
   }
 
   const outputDir = path.resolve('outputs');
-  const selectedCurlPath = path.join(outputDir, 'selected-report-request.curl.sh');
+  const logger = createLogger({ mode: 'cli-capture' });
 
   console.log('Auto login:', options.autoLogin ? 'enabled' : 'disabled');
   console.log('Dropdown workflow:', options.applySelects ? 'enabled' : 'skipped');
   console.log('Fresh profile: forced on (always starts clean)');
   console.log('Keep signed in: forced off for fresh sessions');
+  console.log('Mode: payload capture for one validated selection. Use scrape:all for the full dataset.');
 
-  const browser = await launchBrowser(options);
-  let captureContext: ReturnType<typeof attachNetworkCapture> | null = null;
-
-  try {
-    const page = await browser.newPage();
-    await page.bringToFront().catch(() => null);
-    captureContext = attachNetworkCapture(page);
-    const { captures, getCaptureCount } = captureContext;
-
-    console.log('Opening report URL...');
-    await page.goto(options.reportUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: 120_000,
-    });
-
-    // Authentication
-    if (options.autoLogin) {
-      await runAutomatedLogin(page, options);
-    } else if (!options.headless) {
-      console.log('Complete login/MFA in the browser, then open the report until it loads.');
-      await waitForEnter('Press Enter after the report page is visible.');
-    } else {
-      throw new Error('Headless mode requires --auto-login or a pre-authenticated profile.');
-    }
-
-    // Wait for report surface
-    const reportSurface = await waitForReportSurface(page, options.timeoutMs);
-    if (!reportSurface) {
-      throw new Error(
-        'Could not detect report surface after login. Make sure the report page is loaded.'
-      );
-    }
-
-    console.log('Report page detected at:', reportSurface.currentUrl);
-
-    // Dropdown workflow
-    let dropdownResult: {
-      beforeViewReportCaptureCount: number;
-      captureCountAtRenderComplete?: number;
-    } = { beforeViewReportCaptureCount: getCaptureCount() };
-
-    if (options.applySelects) {
-      dropdownResult = await applyDropdownSelections(
-        page,
-        dropdownSteps,
-        options,
-        getCaptureCount
-      );
-    } else {
-      console.log('Dropdown selection workflow skipped by option.');
-    }
-
-    // Wait for preferred capture
-    const preferredOutcome = await ensurePreferredCapture(
-      page,
-      captures,
-      dropdownResult.beforeViewReportCaptureCount,
-      options,
-      getCaptureCount
-    );
-
-    // Resolve selected capture
-    const selectedCapture = preferredOutcome.selectedCapture;
-
-    if (!selectedCapture) {
-      throw new Error(
-        'No preferred ctl09 network payload captured after report render. Increase PREFERRED_CAPTURE_TIMEOUT_MS or FORCED_ASYNC_RETRIES and re-run capture.'
-      );
-    }
-
-    console.log('Selected bootstrap source:', preferredOutcome.selectedBootstrapSource);
-
-    // Write selected curl only
-    writeText(selectedCurlPath, `${buildCurlCommand(selectedCapture)}\n`);
-    console.log('Selected curl written to:', selectedCurlPath);
-    console.log('Done.');
-  } finally {
-    if (captureContext) {
-      captureContext.detachCapture();
-      captureContext.clearCaptures();
-    }
-    await browser.close();
+  if (!options.autoLogin && !options.headless) {
+    console.log('Capture CLI now expects an authenticated browser profile when auto login is disabled.');
+    console.log('If you need manual login, first sign in with a reusable profile and re-run with --manual-login --user-data-dir <path>.');
   }
+
+  const result = await runCaptureWorkflow({
+    options,
+    logger,
+    paths: {
+      selectedCurlPath: path.join(outputDir, 'selected-report-request.curl.sh'),
+      payloadDirPath: path.join(outputDir, 'payloads'),
+      payloadIndexPath: path.join(outputDir, 'payload-index.json'),
+      curlDirPath: path.join(outputDir, 'captured-curls'),
+      curlBundlePath: path.join(outputDir, 'captured-requests.curl.sh'),
+      summaryPath: path.join(outputDir, 'capture-summary.json'),
+      failureScreenshotPath: path.join(outputDir, 'capture-failure.png'),
+      failureHtmlPath: path.join(outputDir, 'capture-failure.html'),
+    },
+  });
+
+  console.log('Selected bootstrap source:', result.selectedBootstrapSource);
+  console.log('Selected curl written to:', result.selectedCurlPath);
+  if (result.selection) {
+    console.log(
+      'Chosen filters:',
+      `${result.selection.store.text} > ${result.selection.department.text} > ${result.selection.subdepartment.text} > ${result.selection.commodity.text} > ${result.selection.family.text}`
+    );
+  }
+  console.log('Done.');
 }
 
 main().catch((error: unknown) => {

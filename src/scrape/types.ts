@@ -98,6 +98,23 @@ export interface SweepOption {
   text: string;
 }
 
+export type SweepResumeLevel = 'department' | 'subdepartment' | 'commodity' | 'family';
+
+export interface SweepResumeCheckpoint {
+  option: SweepOption;
+  index: number;
+}
+
+export interface SweepResumeCursor {
+  store: SweepResumeCheckpoint;
+  department?: SweepResumeCheckpoint;
+  subdepartment?: SweepResumeCheckpoint;
+  commodity?: SweepResumeCheckpoint;
+  family?: SweepResumeCheckpoint;
+  skipLevel: SweepResumeLevel;
+  reason: string;
+}
+
 export interface SweepSelectionContext {
   store: SweepOption;
   department: SweepOption;
@@ -127,6 +144,7 @@ export interface ScrapeAllOptions {
   password: string;
   keepSignedIn: boolean;
   selectDelayMs: number;
+  browserActionTimeoutMs: number;
   selectPostbackTimeoutMs: number;
   freshProfile: boolean;
   renderTimeoutMs: number;

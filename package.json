@@ -1,10 +1,13 @@
 {
   "name": "ssrs-price-costs",
   "version": "1.0.0",
-  "description": "SSRS session capture with automated dropdown interaction",
+  "description": "Express API for SSRS price and cost scraping",
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "start": "node --env-file-if-exists=.env dist/src/server.js",
+    "serve": "pnpm build && pnpm start",
+    "dev": "tsc && (tsc --watch --preserveWatchOutput &) && sleep 1 && node --watch --env-file-if-exists=.env dist/src/server.js",
     "capture": "tsc && node --env-file-if-exists=.env dist/src/index.js",
     "capture:fresh": "tsc && node --env-file-if-exists=.env dist/src/index.js --fresh-profile",
     "capture:auto": "tsc && node --env-file-if-exists=.env dist/src/index.js --auto-login",
@@ -17,6 +20,10 @@
   },
   "keywords": [
     "ssrs",
+    "express",
+    "api",
+    "typescript",
+    "scraper",
     "session",
     "capture",
     "playwright"
@@ -25,9 +32,11 @@
   "license": "ISC",
   "dependencies": {
     "axios": "^1.13.2",
+    "express": "^5.2.1",
     "playwright-core": "^1.58.2"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
   }

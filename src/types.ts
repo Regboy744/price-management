@@ -21,6 +21,7 @@ export interface CaptureOptions {
   keepSignedIn: boolean;
   applySelects: boolean;
   selectDelayMs: number;
+  browserActionTimeoutMs: number;
   selectPostbackTimeoutMs: number;
   freshProfile: boolean;
   renderTimeoutMs: number;

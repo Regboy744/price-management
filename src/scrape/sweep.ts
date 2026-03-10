@@ -13,12 +13,20 @@ import {
   waitForPostbackOrStateChange,
 } from '../dom.js';
 import { waitForReportPageState, waitForReportSurface, ensurePreferredCapture, pickLatestUsableCapture } from '../report.js';
-import { sleep } from '../utils.js';
+import {
+  resolveBrowserActionTimeoutMs,
+  sleep,
+  TimedActionError,
+  withTimeout,
+} from '../utils.js';
 import type { ProductsCsvAppender } from './output.js';
 import { scrapeFromBootstrap } from './runner.js';
 import type {
   ScrapePageInfo,
   SweepLimits,
+  SweepResumeCheckpoint,
+  SweepResumeCursor,
+  SweepResumeLevel,
   SweepOption,
   SweepSelectionContext,
   SweepStats,
@@ -37,11 +45,42 @@ interface SweepRunInput {
   errorLogPath: string;
   storeCandidates?: SweepOption[];
   logPrefix?: string;
+  stats?: SweepStats;
+  resumeAfter?: SweepResumeCursor | null;
+  throwOnFreeze?: boolean;
 }
 
 interface OptionSet {
   all: SweepOption[];
   iterate: SweepOption[];
+}
+
+type ResumePathLevel = 'store' | SweepResumeLevel;
+
+interface ResumePathContext {
+  store: SweepResumeCheckpoint;
+  department?: SweepResumeCheckpoint;
+  subdepartment?: SweepResumeCheckpoint;
+  commodity?: SweepResumeCheckpoint;
+  family?: SweepResumeCheckpoint;
+}
+
+interface ResumeStartInfo {
+  startIndex: number;
+  carryResume: boolean;
+  resumeIndex: number | null;
+}
+
+export class SweepResumeRequiredError extends Error {
+  readonly resumeAfter: SweepResumeCursor;
+
+  constructor(resumeAfter: SweepResumeCursor) {
+    super(
+      `Fresh-tab resume required after ${resumeAfter.skipLevel} ${resumeAfter[resumeAfter.skipLevel]?.option.text || '(unknown)'}: ${resumeAfter.reason}`
+    );
+    this.name = 'SweepResumeRequiredError';
+    this.resumeAfter = resumeAfter;
+  }
 }
 
 function toSweepOptions(options: SelectOption[]): SweepOption[] {
@@ -92,6 +131,165 @@ function isPageBrokenError(message: string): boolean {
     normalized.includes('error state after view report') ||
     normalized.includes('report viewer returned error')
   );
+}
+
+function isResumeSelectionError(error: unknown): boolean {
+  if (error instanceof TimedActionError) {
+    return true;
+  }
+
+  const normalized = String(error instanceof Error ? error.message : error || '').toLowerCase();
+  return (
+    normalized.includes(' is not available') ||
+    normalized.includes('selection did not stick') ||
+    normalized.includes('dropdown stayed disabled') ||
+    normalized.includes('timed out') ||
+    normalized.includes('timeout')
+  );
+}
+
+function isResumeCombinationError(error: unknown): boolean {
+  if (error instanceof TimedActionError) {
+    return true;
+  }
+
+  const normalized = String(error instanceof Error ? error.message : error || '').toLowerCase();
+  return normalized.includes('timed out') || normalized.includes('timeout');
+}
+
+function createEmptyStats(): SweepStats {
+  return {
+    storesProcessed: 0,
+    combinationsVisited: 0,
+    combinationsScraped: 0,
+    combinationsFailed: 0,
+    rowsWritten: 0,
+    pageRequests: 0,
+  };
+}
+
+function createResumeCheckpoint(option: SweepOption, index: number): SweepResumeCheckpoint {
+  return {
+    option: {
+      value: option.value,
+      text: option.text,
+    },
+    index,
+  };
+}
+
+function createResumeCursor(
+  path: ResumePathContext,
+  skipLevel: SweepResumeLevel,
+  reason: string
+): SweepResumeCursor {
+  return {
+    store: createResumeCheckpoint(path.store.option, path.store.index),
+    department: path.department
+      ? createResumeCheckpoint(path.department.option, path.department.index)
+      : undefined,
+    subdepartment: path.subdepartment
+      ? createResumeCheckpoint(path.subdepartment.option, path.subdepartment.index)
+      : undefined,
+    commodity: path.commodity
+      ? createResumeCheckpoint(path.commodity.option, path.commodity.index)
+      : undefined,
+    family: path.family ? createResumeCheckpoint(path.family.option, path.family.index) : undefined,
+    skipLevel,
+    reason,
+  };
+}
+
+function getResumeCheckpoint(
+  resume: SweepResumeCursor | null | undefined,
+  level: ResumePathLevel
+): SweepResumeCheckpoint | undefined {
+  if (!resume) {
+    return undefined;
+  }
+
+  if (level === 'store') {
+    return resume.store;
+  }
+
+  return resume[level];
+}
+
+function getResumeStartInfo(
+  level: ResumePathLevel,
+  options: SweepOption[],
+  resume: SweepResumeCursor | null | undefined
+): ResumeStartInfo {
+  const checkpoint = getResumeCheckpoint(resume, level);
+  if (!checkpoint) {
+    return {
+      startIndex: 0,
+      carryResume: false,
+      resumeIndex: null,
+    };
+  }
+
+  const foundIndex = options.findIndex((option) => option.value === checkpoint.option.value);
+  const fallbackIndex = Math.min(Math.max(0, checkpoint.index), options.length);
+
+  if (level !== 'store' && resume?.skipLevel === level) {
+    return {
+      startIndex: foundIndex >= 0 ? foundIndex + 1 : fallbackIndex,
+      carryResume: false,
+      resumeIndex: null,
+    };
+  }
+
+  if (foundIndex >= 0) {
+    return {
+      startIndex: foundIndex,
+      carryResume: true,
+      resumeIndex: foundIndex,
+    };
+  }
+
+  return {
+    startIndex: fallbackIndex,
+    carryResume: false,
+    resumeIndex: null,
+  };
+}
+
+function selectionPathLabel(selections: {
+  store?: SweepOption;
+  department?: SweepOption;
+  subdepartment?: SweepOption;
+  commodity?: SweepOption;
+  family?: SweepOption;
+}): string {
+  return [
+    selections.store?.text,
+    selections.department?.text,
+    selections.subdepartment?.text,
+    selections.commodity?.text,
+    selections.family?.text,
+  ]
+    .filter((value): value is string => Boolean(value && value.trim().length > 0))
+    .join(' > ');
+}
+
+function throwFreshTabResume(
+  input: SweepRunInput,
+  cursor: SweepResumeCursor,
+  selections: {
+    store?: SweepOption;
+    department?: SweepOption;
+    subdepartment?: SweepOption;
+    commodity?: SweepOption;
+    family?: SweepOption;
+  }
+): never {
+  const prefix = input.logPrefix ? `${input.logPrefix} ` : '';
+  const path = selectionPathLabel(selections) || '(unknown selection)';
+  const line = `[${path}] ${cursor.reason}`;
+  console.warn(`${prefix}Fresh-tab resume requested: ${line}`);
+  appendError(input.errorLogPath, `[resume] ${line}`);
+  throw new SweepResumeRequiredError(cursor);
 }
 
 async function recoverPage(
@@ -224,14 +422,15 @@ async function resolveOptions(
   page: Page,
   selector: string,
   startFromSecond: boolean,
-  maxItems: number | null
+  maxItems: number | null,
+  actionTimeoutMs: number
 ): Promise<OptionSet> {
-  const enabled = await waitForDropdownEnabled(page, selector, 45_000);
+  const enabled = await waitForDropdownEnabled(page, selector, 45_000, actionTimeoutMs);
   if (!enabled) {
     throw new Error(`Dropdown stayed disabled: ${selector}`);
   }
 
-  const options = toSweepOptions(await getSelectOptions(page, selector));
+  const options = toSweepOptions(await getSelectOptions(page, selector, actionTimeoutMs));
   if (!options.length) {
     throw new Error(`Dropdown has no selectable options: ${selector}`);
   }
@@ -251,12 +450,14 @@ async function ensureDropdownSelection(
   targetValue: string,
   waitForPostback: boolean
 ): Promise<SweepOption> {
-  const enabled = await waitForDropdownEnabled(page, selector, 45_000);
+  const actionTimeoutMs = resolveBrowserActionTimeoutMs(input.captureOptions);
+
+  const enabled = await waitForDropdownEnabled(page, selector, 45_000, actionTimeoutMs);
   if (!enabled) {
     throw new Error(`${label}: dropdown stayed disabled (${selector})`);
   }
 
-  const options = toSweepOptions(await getSelectOptions(page, selector));
+  const options = toSweepOptions(await getSelectOptions(page, selector, actionTimeoutMs));
   const target = options.find((option) => option.value === targetValue);
 
   if (!target) {
@@ -264,12 +465,16 @@ async function ensureDropdownSelection(
     throw new Error(`${label}: value ${targetValue} is not available. Found: ${available}`);
   }
 
-  const current = await getSelectedOption(page, selector);
+  const current = await getSelectedOption(page, selector, actionTimeoutMs);
   if (current.value !== targetValue) {
     const beforeCaptureCount = input.getCaptureCount();
-    const beforeViewState = await getHiddenFieldValue(page, '#__VIEWSTATE');
+    const beforeViewState = await getHiddenFieldValue(page, '#__VIEWSTATE', actionTimeoutMs);
 
-    await page.selectOption(selector, targetValue);
+    await withTimeout(
+      page.selectOption(selector, targetValue),
+      actionTimeoutMs,
+      () => new TimedActionError(`${label} select action`, actionTimeoutMs)
+    );
 
     if (waitForPostback) {
       const result = await waitForPostbackOrStateChange(
@@ -277,7 +482,8 @@ async function ensureDropdownSelection(
         beforeCaptureCount,
         input.getCaptureCount,
         beforeViewState,
-        Math.max(1_000, input.captureOptions.selectPostbackTimeoutMs)
+        Math.max(1_000, input.captureOptions.selectPostbackTimeoutMs),
+        actionTimeoutMs
       );
 
       if (result === 'timeout') {
@@ -288,7 +494,7 @@ async function ensureDropdownSelection(
     }
   }
 
-  const selected = await getSelectedOption(page, selector);
+  const selected = await getSelectedOption(page, selector, actionTimeoutMs);
   if (selected.value !== targetValue) {
     throw new Error(`${label}: selection did not stick (target=${targetValue}, actual=${selected.value || 'none'})`);
   }
@@ -346,21 +552,37 @@ async function ensureExpand(input: SweepRunInput): Promise<void> {
   );
 }
 
-async function clickViewReport(page: Page): Promise<void> {
-  const buttonMatch = await findFirstSelector(page, [VIEW_REPORT_BUTTON_SELECTOR], 20_000);
+async function clickViewReport(page: Page, actionTimeoutMs: number): Promise<void> {
+  const buttonMatch = await findFirstSelector(
+    page,
+    [VIEW_REPORT_BUTTON_SELECTOR],
+    20_000,
+    actionTimeoutMs
+  );
   if (!buttonMatch) {
     throw new Error('View Report button not found.');
   }
 
-  const enabled = await page
-    .$eval(VIEW_REPORT_BUTTON_SELECTOR, (button) => !(button as HTMLButtonElement).disabled)
-    .catch(() => false);
+  const enabled = await withTimeout(
+    page.$eval(VIEW_REPORT_BUTTON_SELECTOR, (button) => !(button as HTMLButtonElement).disabled),
+    actionTimeoutMs,
+    () => new TimedActionError('View Report enabled check', actionTimeoutMs)
+  ).catch((error) => {
+    if (error instanceof TimedActionError) {
+      throw error;
+    }
+    return false;
+  });
 
   if (!enabled) {
     throw new Error('View Report button is disabled.');
   }
 
-  await buttonMatch.handle.click();
+  await withTimeout(
+    buttonMatch.handle.click(),
+    actionTimeoutMs,
+    () => new TimedActionError('View Report click', actionTimeoutMs)
+  );
   await sleep(200);
 }
 
@@ -378,15 +600,9 @@ function logOptions(
 
 export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats> {
   const prefix = input.logPrefix ? `${input.logPrefix} ` : '';
-
-  const stats: SweepStats = {
-    storesProcessed: 0,
-    combinationsVisited: 0,
-    combinationsScraped: 0,
-    combinationsFailed: 0,
-    rowsWritten: 0,
-    pageRequests: 0,
-  };
+  const stats = input.stats ?? createEmptyStats();
+  const initialResume = input.resumeAfter ?? null;
+  const actionTimeoutMs = resolveBrowserActionTimeoutMs(input.captureOptions);
 
   let storeCandidates: SweepOption[];
 
@@ -398,13 +614,20 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
       input.page,
       sweepFields.store.selector,
       false,
-      input.limits.maxStores
+      input.limits.maxStores,
+      actionTimeoutMs
     );
     logOptions(sweepFields.store.label, storeOptionSet, false, prefix);
     storeCandidates = storeOptionSet.iterate;
   }
 
-  for (const storeCandidate of storeCandidates) {
+  const storeResumeInfo = getResumeStartInfo('store', storeCandidates, initialResume);
+
+  for (let storeIndex = storeResumeInfo.startIndex; storeIndex < storeCandidates.length; storeIndex += 1) {
+    const storeCandidate = storeCandidates[storeIndex]!;
+    const storeResume =
+      storeResumeInfo.carryResume && storeResumeInfo.resumeIndex === storeIndex ? initialResume : null;
+
     const store = await ensureDropdownSelection(
       input.page,
       input,
@@ -414,7 +637,9 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
       sweepFields.store.waitForPostback
     );
 
-    stats.storesProcessed += 1;
+    if (!storeResume) {
+      stats.storesProcessed += 1;
+    }
     console.log(`${prefix}Store selected: ${store.text}`);
 
     await applyFixedFilters(input);
@@ -423,7 +648,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
       input.page,
       sweepFields.department.selector,
       startFromSecondSelections.department,
-      input.limits.maxDepartments
+      input.limits.maxDepartments,
+      actionTimeoutMs
     );
     logOptions(sweepFields.department.label, departmentOptions, true, prefix);
 
@@ -432,22 +658,79 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
       continue;
     }
 
-    for (const departmentCandidate of departmentOptions.iterate) {
-      const department = await ensureDropdownSelection(
-        input.page,
-        input,
-        sweepFields.department.selector,
-        sweepFields.department.label,
-        departmentCandidate.value,
-        sweepFields.department.waitForPostback
-      );
+    const departmentResumeInfo = getResumeStartInfo(
+      'department',
+      departmentOptions.iterate,
+      storeResume
+    );
 
-      const subdepartmentOptions = await resolveOptions(
-        input.page,
-        sweepFields.subdepartment.selector,
-        startFromSecondSelections.subdepartment,
-        input.limits.maxSubdepartments
-      );
+    for (
+      let departmentIndex = departmentResumeInfo.startIndex;
+      departmentIndex < departmentOptions.iterate.length;
+      departmentIndex += 1
+    ) {
+      const departmentCandidate = departmentOptions.iterate[departmentIndex]!;
+      let department: SweepOption;
+
+      try {
+        department = await ensureDropdownSelection(
+          input.page,
+          input,
+          sweepFields.department.selector,
+          sweepFields.department.label,
+          departmentCandidate.value,
+          sweepFields.department.waitForPostback
+        );
+      } catch (error) {
+        if (input.throwOnFreeze && isResumeSelectionError(error)) {
+          throwFreshTabResume(
+            input,
+            createResumeCursor(
+              {
+                store: createResumeCheckpoint(store, storeIndex),
+                department: createResumeCheckpoint(departmentCandidate, departmentIndex),
+              },
+              'department',
+              error instanceof Error ? error.message : String(error)
+            ),
+            { store, department: departmentCandidate }
+          );
+        }
+        throw error;
+      }
+
+      const departmentResume =
+        departmentResumeInfo.carryResume && departmentResumeInfo.resumeIndex === departmentIndex
+          ? storeResume
+          : null;
+
+      let subdepartmentOptions: OptionSet;
+
+      try {
+        subdepartmentOptions = await resolveOptions(
+          input.page,
+          sweepFields.subdepartment.selector,
+          startFromSecondSelections.subdepartment,
+          input.limits.maxSubdepartments,
+          actionTimeoutMs
+        );
+      } catch (error) {
+        if (input.throwOnFreeze && isResumeSelectionError(error)) {
+          throwFreshTabResume(
+            input,
+            createResumeCursor(
+              {
+                store: createResumeCheckpoint(store, storeIndex),
+                department: createResumeCheckpoint(department, departmentIndex),
+              },
+              'department',
+              error instanceof Error ? error.message : String(error)
+            ),
+            { store, department }
+          );
+        }
+        throw error;
+      }
       logOptions(sweepFields.subdepartment.label, subdepartmentOptions, true, prefix);
 
       if (!subdepartmentOptions.iterate.length) {
@@ -457,22 +740,82 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
         continue;
       }
 
-      for (const subdepartmentCandidate of subdepartmentOptions.iterate) {
-        const subdepartment = await ensureDropdownSelection(
-          input.page,
-          input,
-          sweepFields.subdepartment.selector,
-          sweepFields.subdepartment.label,
-          subdepartmentCandidate.value,
-          sweepFields.subdepartment.waitForPostback
-        );
+      const subdepartmentResumeInfo = getResumeStartInfo(
+        'subdepartment',
+        subdepartmentOptions.iterate,
+        departmentResume
+      );
 
-        const commodityOptions = await resolveOptions(
-          input.page,
-          sweepFields.commodity.selector,
-          startFromSecondSelections.commodity,
-          input.limits.maxCommodities
-        );
+      for (
+        let subdepartmentIndex = subdepartmentResumeInfo.startIndex;
+        subdepartmentIndex < subdepartmentOptions.iterate.length;
+        subdepartmentIndex += 1
+      ) {
+        const subdepartmentCandidate = subdepartmentOptions.iterate[subdepartmentIndex]!;
+        let subdepartment: SweepOption;
+
+        try {
+          subdepartment = await ensureDropdownSelection(
+            input.page,
+            input,
+            sweepFields.subdepartment.selector,
+            sweepFields.subdepartment.label,
+            subdepartmentCandidate.value,
+            sweepFields.subdepartment.waitForPostback
+          );
+        } catch (error) {
+          if (input.throwOnFreeze && isResumeSelectionError(error)) {
+            throwFreshTabResume(
+              input,
+              createResumeCursor(
+                {
+                  store: createResumeCheckpoint(store, storeIndex),
+                  department: createResumeCheckpoint(department, departmentIndex),
+                  subdepartment: createResumeCheckpoint(subdepartmentCandidate, subdepartmentIndex),
+                },
+                'subdepartment',
+                error instanceof Error ? error.message : String(error)
+              ),
+              { store, department, subdepartment: subdepartmentCandidate }
+            );
+          }
+          throw error;
+        }
+
+        const subdepartmentResume =
+          subdepartmentResumeInfo.carryResume &&
+          subdepartmentResumeInfo.resumeIndex === subdepartmentIndex
+            ? departmentResume
+            : null;
+
+        let commodityOptions: OptionSet;
+
+        try {
+          commodityOptions = await resolveOptions(
+            input.page,
+            sweepFields.commodity.selector,
+            startFromSecondSelections.commodity,
+            input.limits.maxCommodities,
+            actionTimeoutMs
+          );
+        } catch (error) {
+          if (input.throwOnFreeze && isResumeSelectionError(error)) {
+            throwFreshTabResume(
+              input,
+              createResumeCursor(
+                {
+                  store: createResumeCheckpoint(store, storeIndex),
+                  department: createResumeCheckpoint(department, departmentIndex),
+                  subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
+                },
+                'subdepartment',
+                error instanceof Error ? error.message : String(error)
+              ),
+              { store, department, subdepartment }
+            );
+          }
+          throw error;
+        }
         logOptions(sweepFields.commodity.label, commodityOptions, true, prefix);
 
         if (!commodityOptions.iterate.length) {
@@ -482,22 +825,83 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
           continue;
         }
 
-        for (const commodityCandidate of commodityOptions.iterate) {
-          const commodity = await ensureDropdownSelection(
-            input.page,
-            input,
-            sweepFields.commodity.selector,
-            sweepFields.commodity.label,
-            commodityCandidate.value,
-            sweepFields.commodity.waitForPostback
-          );
+        const commodityResumeInfo = getResumeStartInfo(
+          'commodity',
+          commodityOptions.iterate,
+          subdepartmentResume
+        );
 
-          const familyOptions = await resolveOptions(
-            input.page,
-            sweepFields.family.selector,
-            startFromSecondSelections.family,
-            input.limits.maxFamilies
-          );
+        for (
+          let commodityIndex = commodityResumeInfo.startIndex;
+          commodityIndex < commodityOptions.iterate.length;
+          commodityIndex += 1
+        ) {
+          const commodityCandidate = commodityOptions.iterate[commodityIndex]!;
+          let commodity: SweepOption;
+
+          try {
+            commodity = await ensureDropdownSelection(
+              input.page,
+              input,
+              sweepFields.commodity.selector,
+              sweepFields.commodity.label,
+              commodityCandidate.value,
+              sweepFields.commodity.waitForPostback
+            );
+          } catch (error) {
+            if (input.throwOnFreeze && isResumeSelectionError(error)) {
+              throwFreshTabResume(
+                input,
+                createResumeCursor(
+                  {
+                    store: createResumeCheckpoint(store, storeIndex),
+                    department: createResumeCheckpoint(department, departmentIndex),
+                    subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
+                    commodity: createResumeCheckpoint(commodityCandidate, commodityIndex),
+                  },
+                  'commodity',
+                  error instanceof Error ? error.message : String(error)
+                ),
+                { store, department, subdepartment, commodity: commodityCandidate }
+              );
+            }
+            throw error;
+          }
+
+          const commodityResume =
+            commodityResumeInfo.carryResume && commodityResumeInfo.resumeIndex === commodityIndex
+              ? subdepartmentResume
+              : null;
+
+          let familyOptions: OptionSet;
+
+          try {
+            familyOptions = await resolveOptions(
+              input.page,
+              sweepFields.family.selector,
+              startFromSecondSelections.family,
+              input.limits.maxFamilies,
+              actionTimeoutMs
+            );
+          } catch (error) {
+            if (input.throwOnFreeze && isResumeSelectionError(error)) {
+              throwFreshTabResume(
+                input,
+                createResumeCursor(
+                  {
+                    store: createResumeCheckpoint(store, storeIndex),
+                    department: createResumeCheckpoint(department, departmentIndex),
+                    subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
+                    commodity: createResumeCheckpoint(commodity, commodityIndex),
+                  },
+                  'commodity',
+                  error instanceof Error ? error.message : String(error)
+                ),
+                { store, department, subdepartment, commodity }
+              );
+            }
+            throw error;
+          }
           logOptions(sweepFields.family.label, familyOptions, true, prefix);
 
           if (!familyOptions.iterate.length) {
@@ -509,7 +913,14 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
 
           let consecutiveRecoveries = 0;
 
-          for (const familyCandidate of familyOptions.iterate) {
+          const familyResumeInfo = getResumeStartInfo('family', familyOptions.iterate, commodityResume);
+
+          for (
+            let familyIndex = familyResumeInfo.startIndex;
+            familyIndex < familyOptions.iterate.length;
+            familyIndex += 1
+          ) {
+            const familyCandidate = familyOptions.iterate[familyIndex]!;
             let family: SweepOption | undefined;
 
             try {
@@ -523,6 +934,26 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
               );
             } catch (familyError) {
               const familyMsg = familyError instanceof Error ? familyError.message : String(familyError);
+
+              if (input.throwOnFreeze && isResumeSelectionError(familyError)) {
+                stats.combinationsVisited += 1;
+                stats.combinationsFailed += 1;
+                throwFreshTabResume(
+                  input,
+                  createResumeCursor(
+                    {
+                      store: createResumeCheckpoint(store, storeIndex),
+                      department: createResumeCheckpoint(department, departmentIndex),
+                      subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
+                      commodity: createResumeCheckpoint(commodity, commodityIndex),
+                      family: createResumeCheckpoint(familyCandidate, familyIndex),
+                    },
+                    'family',
+                    familyMsg
+                  ),
+                  { store, department, subdepartment, commodity, family: familyCandidate }
+                );
+              }
 
               if (!isPageBrokenError(familyMsg)) {
                 throw familyError;
@@ -607,12 +1038,14 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
 
                 for (let captureAttempt = 1; captureAttempt <= 2; captureAttempt += 1) {
                   const beforeCaptureCount = input.getCaptureCount();
-                  await clickViewReport(input.page);
+                  await clickViewReport(input.page, actionTimeoutMs);
+                  console.log(`[${combo}] waiting for report render state...`);
 
                   await waitForReportPageState(
                     input.page,
                     Math.max(10_000, input.captureOptions.renderTimeoutMs),
-                    { requireEanHeader: false }
+                    { requireEanHeader: false },
+                    actionTimeoutMs
                   );
 
                   const waitMs = Math.max(0, input.captureOptions.postRenderCaptureWaitMs);
@@ -702,6 +1135,25 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 finalErrorMessage = message;
+
+                if (input.throwOnFreeze && isResumeCombinationError(error)) {
+                  stats.combinationsFailed += 1;
+                  throwFreshTabResume(
+                    input,
+                    createResumeCursor(
+                      {
+                        store: createResumeCheckpoint(store, storeIndex),
+                        department: createResumeCheckpoint(department, departmentIndex),
+                        subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
+                        commodity: createResumeCheckpoint(commodity, commodityIndex),
+                        family: createResumeCheckpoint(family, familyIndex),
+                      },
+                      'family',
+                      message
+                    ),
+                    selection
+                  );
+                }
 
                 const shouldRetry = combinationAttempt < 2 && isRetriableSweepError(message);
                 if (shouldRetry) {

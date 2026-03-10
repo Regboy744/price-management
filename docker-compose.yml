@@ -1,0 +1,38 @@
+services:
+  app:
+    build: .
+    container_name: ssrs-price-costs
+    ports:
+      - "3001:3001"
+
+    # Chrome in Docker needs extra shared memory
+    shm_size: "2gb"
+
+    environment:
+      - CHROME_PATH=/usr/bin/google-chrome-stable
+      - HEADLESS=true
+
+    volumes:
+      # ── Live-edit mounts (changes on host are immediately visible) ──
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./package.json:/app/package.json
+      - ./pnpm-lock.yaml:/app/pnpm-lock.yaml
+      - ./.env:/app/.env
+
+      # ── Persist outputs and browser profile on host ─────────────────
+      - ./outputs:/app/outputs
+      - ./.playwright-profile:/app/.playwright-profile
+
+      # ── Isolate node_modules inside container (avoids arch mismatch) ─
+      - node_modules:/app/node_modules
+
+      # ── Compiled JS visible on host for inspection ──────────────────
+      - ./dist:/app/dist
+
+    # Restart on crash (useful for long-running scrape jobs)
+    restart: unless-stopped
+
+volumes:
+  node_modules:

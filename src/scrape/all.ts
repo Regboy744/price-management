@@ -155,6 +155,7 @@ function parseArgs(argv: string[]): ScrapeAllOptions {
     password: envPassword,
     keepSignedIn: envBool(process.env['MS_KEEP_SIGNED_IN'], false),
     selectDelayMs: Number(process.env['SELECT_DELAY_MS'] || 1_000),
+    browserActionTimeoutMs: Number(process.env['BROWSER_ACTION_TIMEOUT_MS'] || 15_000),
     selectPostbackTimeoutMs: Number(process.env['SELECT_POSTBACK_TIMEOUT_MS'] || 6_000),
     freshProfile: true,
     renderTimeoutMs: Number(process.env['REPORT_RENDER_TIMEOUT_MS'] || 180_000),
@@ -243,6 +244,11 @@ function parseArgs(argv: string[]): ScrapeAllOptions {
       case '--select-delay-ms':
         if (!next) throw new Error('Missing value for --select-delay-ms');
         options.selectDelayMs = toNonNegativeInteger(next, '--select-delay-ms');
+        i += 1;
+        break;
+      case '--browser-action-timeout-ms':
+        if (!next) throw new Error('Missing value for --browser-action-timeout-ms');
+        options.browserActionTimeoutMs = toPositiveInteger(next, '--browser-action-timeout-ms');
         i += 1;
         break;
       case '--select-postback-timeout-ms':
@@ -339,6 +345,7 @@ function printUsage(): void {
   console.log('  --timeout-ms <ms>                       Wait timeout for report surface');
   console.log('  --render-timeout-ms <ms>                Wait timeout after View Report click');
   console.log('  --select-delay-ms <ms>                  Delay after dropdown selection');
+  console.log('  --browser-action-timeout-ms <ms>        Hard timeout for page actions');
   console.log('  --select-postback-timeout-ms <ms>       Wait for dropdown postback');
   console.log('  --post-render-capture-wait-ms <ms>      Extra wait for final network payload');
   console.log('  --preferred-capture-timeout-ms <ms>     Wait for preferred payload after render');
@@ -355,10 +362,10 @@ function printUsage(): void {
   console.log('  --help                                  Show this help');
   console.log('');
   console.log('Env vars: MS_USERNAME, MS_PASSWORD, AUTO_LOGIN, CHROME_PATH, REQUEST_DELAY_MS,');
-  console.log('  SELECT_DELAY_MS, SELECT_POSTBACK_TIMEOUT_MS, REPORT_RENDER_TIMEOUT_MS,');
+  console.log('  SELECT_DELAY_MS, BROWSER_ACTION_TIMEOUT_MS, SELECT_POSTBACK_TIMEOUT_MS, REPORT_RENDER_TIMEOUT_MS,');
   console.log('  POST_RENDER_CAPTURE_WAIT_MS, PREFERRED_CAPTURE_TIMEOUT_MS, FORCED_ASYNC_RETRIES,');
   console.log('  MS_KEEP_SIGNED_IN, PARALLEL_TABS, CAPTURE_MAX_ITEMS, CAPTURE_MAX_BYTES_MB,');
-  console.log('  STORE_RETRY_COUNT, PARALLEL_TAB_STAGGER_MS, HTTP_REQUEST_TIMEOUT_MS,');
+  console.log('  STORE_RETRY_COUNT, MAX_FRESH_TAB_RESUMES_PER_STORE, PARALLEL_TAB_STAGGER_MS, HTTP_REQUEST_TIMEOUT_MS,');
   console.log('  HTTP_REQUEST_RETRIES, HTTP_REQUEST_RETRY_DELAY_MS, MEM_TELEMETRY_INTERVAL_MS');
 }
 
@@ -390,6 +397,7 @@ function toCaptureOptions(options: ScrapeAllOptions): CaptureOptions {
     keepSignedIn: options.keepSignedIn,
     applySelects: false,
     selectDelayMs: options.selectDelayMs,
+    browserActionTimeoutMs: options.browserActionTimeoutMs,
     selectPostbackTimeoutMs: options.selectPostbackTimeoutMs,
     freshProfile: options.freshProfile,
     renderTimeoutMs: options.renderTimeoutMs,
