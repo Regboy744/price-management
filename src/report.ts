@@ -71,6 +71,13 @@ export async function waitForReportPageState(
   const requireEanHeader = options?.requireEanHeader ?? true;
   const requireReportTitle = options?.requireReportTitle ?? true;
 
+  let lastState: ReportPageState = {
+    visibilityState: '',
+    pageUrl: '',
+    hasReportTitle: false,
+    hasEanHeader: false,
+  };
+
   while (Date.now() - start < timeoutMs) {
     const state = await page
       .evaluate(
@@ -79,9 +86,14 @@ export async function waitForReportPageState(
             'input[name="ReportViewerControl$ctl09$VisibilityState$ctl00"]'
           ) as HTMLInputElement | null;
 
+          // Use the visible report content area first — the rendered report
+          // title and data table headers live inside #ReportViewerControl_ctl09
+          // (specifically its VisibleReportContent child), while _ReportArea
+          // is a sibling that mostly holds hidden-field state.
           const reportScope =
-            document.querySelector('#ReportViewerControl_ctl09_ReportArea') ||
+            document.querySelector('#VisibleReportContentReportViewerControl_ctl09') ||
             document.querySelector('#ReportViewerControl_ctl09') ||
+            document.querySelector('#ReportViewerControl_ctl09_ReportArea') ||
             document.querySelector('#ReportViewerControl') ||
             document.body;
 
@@ -89,19 +101,14 @@ export async function waitForReportPageState(
           let hasEanHeader = false;
 
           if (reportScope) {
-            const walker = document.createTreeWalker(reportScope, NodeFilter.SHOW_TEXT);
-            let node = walker.nextNode();
+            // Collect all text under reportScope and normalize whitespace so
+            // that markers split across multiple text nodes or containing
+            // newlines/extra spaces are still matched correctly.
+            const rawText = reportScope.textContent || '';
+            const normalizedText = rawText.replace(/\s+/g, ' ');
 
-            while (node && (!hasReportTitle || !hasEanHeader)) {
-              const text = node.textContent || '';
-              if (!hasReportTitle && text.includes(titleMarker)) {
-                hasReportTitle = true;
-              }
-              if (!hasEanHeader && text.includes(headerMarker)) {
-                hasEanHeader = true;
-              }
-              node = walker.nextNode();
-            }
+            hasReportTitle = normalizedText.includes(titleMarker);
+            hasEanHeader = normalizedText.includes(headerMarker);
           }
 
           return {
@@ -119,6 +126,8 @@ export async function waitForReportPageState(
         hasReportTitle: false,
         hasEanHeader: false,
       }));
+
+    lastState = state;
 
     if (state.visibilityState === 'Error') {
       throw new Error('Report viewer returned Error state after View Report.');
@@ -139,8 +148,15 @@ export async function waitForReportPageState(
   if (requireEanHeader) expectedMarkers.push(header);
 
   const markerText = expectedMarkers.length > 0 ? expectedMarkers.join(' and ') : 'ReportPage state';
+  const diag = [
+    `visibilityState=${lastState.visibilityState || '(empty)'}`,
+    `hasTitle=${lastState.hasReportTitle}`,
+    `hasEan=${lastState.hasEanHeader}`,
+    `url=${lastState.pageUrl || '(unknown)'}`,
+  ].join(', ');
+
   throw new Error(
-    `Timed out waiting for report render markers after View Report click (expected: ${markerText}).`
+    `Timed out waiting for report render markers after View Report click (expected: ${markerText}). Diagnostics: ${diag}`
   );
 }
 

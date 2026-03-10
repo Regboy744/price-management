@@ -70,6 +70,7 @@ function isRetriableSweepError(message: string): boolean {
 
   return [
     'timeout',
+    'timed out',
     'target page, context or browser has been closed',
     'execution context was destroyed',
     'frame was detached',
