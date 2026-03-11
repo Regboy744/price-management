@@ -22,6 +22,7 @@ import {
 import type { ProductsCsvAppender } from './output.js';
 import { scrapeFromBootstrap } from './runner.js';
 import type {
+  ProductRow,
   ScrapePageInfo,
   SweepLimits,
   SweepResumeCheckpoint,
@@ -166,6 +167,31 @@ function createEmptyStats(): SweepStats {
     rowsWritten: 0,
     pageRequests: 0,
   };
+}
+
+/**
+ * Copy the current dropdown selections into each scraped row so CSV output can
+ * include hierarchy columns without changing the parser responsibilities.
+ */
+function enrichRowsWithSelectionContext(
+  rows: ProductRow[],
+  selection: SweepSelectionContext
+): ProductRow[] {
+  if (!rows.length) {
+    return rows;
+  }
+
+  const rowContext = {
+    department: selection.department.text,
+    subdepartment: selection.subdepartment.text,
+    commodity_code: selection.commodity.text,
+    family_group: selection.family.text,
+  };
+
+  return rows.map((row) => ({
+    ...row,
+    ...rowContext,
+  }));
 }
 
 function createResumeCheckpoint(option: SweepOption, index: number): SweepResumeCheckpoint {
@@ -1098,7 +1124,11 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                       logLabel: `[${combo}]`,
                       allowEmptyReport: true,
                       onPageRows: async (rows, pageMeta: ScrapePageInfo) => {
-                        const written = await input.csvAppender.appendRows(rows, selection.store.text);
+                        const rowsWithSelectionContext = enrichRowsWithSelectionContext(rows, selection);
+                        const written = await input.csvAppender.appendRows(
+                          rowsWithSelectionContext,
+                          selection.store.text
+                        );
                         stats.rowsWritten += written;
                         stats.pageRequests += 1;
                         console.log(

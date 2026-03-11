@@ -12,6 +12,10 @@ export function sanitizeStoreName(name: string): string {
 }
 
 const csvColumns: Array<{ label: string; key: keyof ProductRow }> = [
+  { label: 'Department', key: 'department' },
+  { label: 'Sub Department', key: 'subdepartment' },
+  { label: 'Commodity Code', key: 'commodity_code' },
+  { label: 'Family Group', key: 'family_group' },
   { label: 'EAN/PLU', key: 'ean_plu' },
   { label: 'Root Article Code', key: 'root_article_code' },
   { label: 'LU', key: 'lu' },

@@ -45,6 +45,10 @@ export interface ProductRow {
   drs: string;
   supplier: string;
   article_linking: string;
+  department?: string;
+  subdepartment?: string;
+  commodity_code?: string;
+  family_group?: string;
 }
 
 export interface ScrapePageInfo {
