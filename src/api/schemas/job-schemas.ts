@@ -1,6 +1,4 @@
 import { ValidationError } from '../../shared/errors/app-error.js';
-import type { CaptureJobRequest } from '../../modules/capture/capture.types.js';
-import type { ReplayJobRequest } from '../../modules/replay/replay.types.js';
 import type { SweepJobRequest } from '../../modules/sweep/sweep.types.js';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -105,54 +103,6 @@ function readOptionalStringList(source: Record<string, unknown>, key: string): s
   }
 
   return [...new Set(normalizedItems)];
-}
-
-export function parseCaptureJobRequest(body: unknown): CaptureJobRequest {
-  const source = asObject(body);
-
-  return {
-    reportUrl: readOptionalString(source, 'reportUrl'),
-    chromePath: readOptionalString(source, 'chromePath'),
-    userDataDir: readOptionalString(source, 'userDataDir'),
-    headless: readOptionalBoolean(source, 'headless'),
-    autoLogin: readOptionalBoolean(source, 'autoLogin'),
-    username: readOptionalString(source, 'username'),
-    password: readOptionalString(source, 'password'),
-    keepSignedIn: readOptionalBoolean(source, 'keepSignedIn'),
-    applySelects: readOptionalBoolean(source, 'applySelects'),
-    selectDelayMs: readOptionalInteger(source, 'selectDelayMs', 0),
-    browserActionTimeoutMs: readOptionalInteger(source, 'browserActionTimeoutMs', 1),
-    selectPostbackTimeoutMs: readOptionalInteger(source, 'selectPostbackTimeoutMs', 0),
-    timeoutMs: readOptionalInteger(source, 'timeoutMs', 1),
-    freshProfile: readOptionalBoolean(source, 'freshProfile'),
-    renderTimeoutMs: readOptionalInteger(source, 'renderTimeoutMs', 1),
-    postRenderCaptureWaitMs: readOptionalInteger(source, 'postRenderCaptureWaitMs', 0),
-    preferredCaptureTimeoutMs: readOptionalInteger(source, 'preferredCaptureTimeoutMs', 0),
-    forcedAsyncRetries: readOptionalInteger(source, 'forcedAsyncRetries', 0),
-    outputFileName: readOptionalString(source, 'outputFileName'),
-  };
-}
-
-export function parseReplayJobRequest(body: unknown): ReplayJobRequest {
-  const source = asObject(body);
-  const request: ReplayJobRequest = {
-    curlFile: readOptionalString(source, 'curlFile'),
-    captureJobId: readOptionalString(source, 'captureJobId'),
-    outputFileName: readOptionalString(source, 'outputFileName'),
-    maxPages: readOptionalInteger(source, 'maxPages', 1),
-    requestDelayMs: readOptionalInteger(source, 'requestDelayMs', 0),
-    applyFormOverrides: readOptionalBoolean(source, 'applyFormOverrides'),
-  };
-
-  if (!request.curlFile && !request.captureJobId) {
-    throw new ValidationError('Replay jobs require either curlFile or captureJobId.');
-  }
-
-  if (request.curlFile && request.captureJobId) {
-    throw new ValidationError('Replay jobs accept curlFile or captureJobId, but not both.');
-  }
-
-  return request;
 }
 
 export function parseSweepJobRequest(body: unknown): SweepJobRequest {

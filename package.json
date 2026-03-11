@@ -7,16 +7,7 @@
     "build": "tsc",
     "start": "node --env-file-if-exists=.env dist/src/server.js",
     "serve": "pnpm build && pnpm start",
-    "dev": "tsc && (tsc --watch --preserveWatchOutput &) && sleep 1 && node --watch --env-file-if-exists=.env dist/src/server.js",
-    "capture": "tsc && node --env-file-if-exists=.env dist/src/index.js",
-    "capture:fresh": "tsc && node --env-file-if-exists=.env dist/src/index.js --fresh-profile",
-    "capture:auto": "tsc && node --env-file-if-exists=.env dist/src/index.js --auto-login",
-    "capture:help": "tsc && node dist/src/index.js --help",
-    "scrape": "tsc && node --env-file-if-exists=.env dist/src/scrape/index.js",
-    "scrape:help": "tsc && node dist/src/scrape/index.js --help",
-    "scrape:all": "tsc && node --env-file-if-exists=.env dist/src/scrape/all.js",
-    "scrape:all:sequential": "tsc && node --env-file-if-exists=.env dist/src/scrape/all.js --sequential",
-    "scrape:all:help": "tsc && node dist/src/scrape/all.js --help"
+    "dev": "tsc && (tsc --watch --preserveWatchOutput &) && sleep 1 && node --watch --env-file-if-exists=.env dist/src/server.js"
   },
   "keywords": [
     "ssrs",
@@ -24,8 +15,6 @@
     "api",
     "typescript",
     "scraper",
-    "session",
-    "capture",
     "playwright"
   ],
   "author": "",

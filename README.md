@@ -1,14 +1,8 @@
 # SSRS Price Costs API
 
-Express + TypeScript API for extracting SSRS price and cost data.
+Express + TypeScript API that logs in to SSRS, sweeps report filters, and writes CSV output.
 
-Project goal: iterate the SSRS report across all stores, departments, subdepartments, commodities, and families, then write the scraped rows to CSV files.
-
-Important workflow note:
-
-- `capture` is a bootstrap/debug job; it intentionally stops after one valid selection and saves a reusable network payload.
-- `replay` reuses one captured payload and scrapes rows for that single selection.
-- `scrape` / `sweep` is the real full-data job that iterates all report combinations.
+Main purpose: run a full scrape across stores, departments, subdepartments, commodities, and families.
 
 ## Start
 
@@ -24,16 +18,13 @@ The API starts on `http://localhost:3000` by default.
 - `GET /api/v1/health`
 - `GET /api/v1/jobs`
 - `POST /api/v1/jobs/scrape`
-- `POST /api/v1/jobs/sweep`
-- `POST /api/v1/jobs/capture`
-- `POST /api/v1/jobs/replay`
 - `GET /api/v1/jobs/:jobId`
 - `GET /api/v1/jobs/:jobId/result`
 - `GET /api/v1/jobs/:jobId/artifacts`
 
 ## Example Requests
 
-Start the full scrape job:
+Start a full scrape job:
 
 ```bash
 curl -X POST http://localhost:3000/api/v1/jobs/scrape \
@@ -46,7 +37,7 @@ curl -X POST http://localhost:3000/api/v1/jobs/scrape \
   }'
 ```
 
-Scrape only specific store values from the SSRS dropdown:
+Scrape specific stores only:
 
 ```bash
 curl -X POST http://localhost:3000/api/v1/jobs/scrape \
@@ -57,32 +48,14 @@ curl -X POST http://localhost:3000/api/v1/jobs/scrape \
   }'
 ```
 
-Start a capture bootstrap job:
+Check one job:
 
 ```bash
-curl -X POST http://localhost:3000/api/v1/jobs/capture \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "autoLogin": true,
-    "freshProfile": true,
-    "applySelects": true
-  }'
-```
-
-Replay a completed capture job for one selection:
-
-```bash
-curl -X POST http://localhost:3000/api/v1/jobs/replay \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "captureJobId": "replace-with-job-id",
-    "applyFormOverrides": true
-  }'
+curl http://localhost:3000/api/v1/jobs/<job-id>
 ```
 
 ## Notes
 
-- Browser-heavy jobs are queued asynchronously and return `202 Accepted` with a `jobId`.
+- Scrape jobs are asynchronous and return `202 Accepted` with a `jobId`.
 - Job artifacts are written under `outputs/jobs/<jobId>/`.
-- Capture and sweep jobs require either `autoLogin` credentials or an existing authenticated browser profile with `freshProfile=false`.
-- If you want the full dataset, use `POST /api/v1/jobs/scrape` or `POST /api/v1/jobs/sweep`, not `capture`.
+- Scrape jobs require either `autoLogin` credentials or an existing authenticated browser profile with `freshProfile=false`.

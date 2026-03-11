@@ -4,9 +4,7 @@ import type { AppContext } from './app-context.js';
 import { createApiRouter } from './api/routes/index.js';
 import { appEnvironment, type AppEnvironment } from './config/env.js';
 import { createLogger } from './config/logger.js';
-import { CaptureService } from './modules/capture/capture.service.js';
 import { JobManager } from './modules/jobs/job-manager.js';
-import { ReplayService } from './modules/replay/replay.service.js';
 import { SweepService } from './modules/sweep/sweep.service.js';
 import { createErrorHandler } from './api/middlewares/error-handler.js';
 
@@ -14,8 +12,7 @@ export function createAppContext(env: AppEnvironment = appEnvironment): AppConte
   const logger = createLogger({ service: 'ssrs-price-costs-api', env: env.nodeEnv });
   const jobManager = new JobManager({
     jobsRootDir: env.storage.jobsRootDir,
-    browserConcurrency: env.queue.browserConcurrency,
-    replayConcurrency: env.queue.replayConcurrency,
+    concurrency: env.queue.browserConcurrency,
     logger,
   });
 
@@ -23,8 +20,6 @@ export function createAppContext(env: AppEnvironment = appEnvironment): AppConte
     env,
     logger,
     jobManager,
-    captureService: new CaptureService(env),
-    replayService: new ReplayService(env),
     sweepService: new SweepService(env),
   };
 }

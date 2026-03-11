@@ -3,24 +3,16 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Logger } from '../../config/logger.js';
 import { listFilesRecursively, resolveJobDirectory } from '../../config/paths.js';
-import { AppError, NotFoundError, toAppError } from '../../shared/errors/app-error.js';
+import { NotFoundError, toAppError, type AppError } from '../../shared/errors/app-error.js';
 import { redactSensitiveData } from '../../shared/utils/redact.js';
 import type {
   CreateJobRequest,
   JobArtifacts,
   JobErrorSummary,
-  JobLane,
-  JobRunnerContext,
   JobStatus,
   JobSummary,
-  JobType,
+  JobRunnerContext,
 } from './job.types.js';
-
-interface LaneState {
-  activeCount: number;
-  concurrency: number;
-  queue: string[];
-}
 
 interface InternalJobRecord<TResult = unknown> extends JobSummary<TResult> {
   run: (context: JobRunnerContext) => Promise<TResult>;
@@ -28,29 +20,19 @@ interface InternalJobRecord<TResult = unknown> extends JobSummary<TResult> {
 
 export interface JobManagerOptions {
   jobsRootDir: string;
-  browserConcurrency: number;
-  replayConcurrency: number;
+  concurrency: number;
   logger: Logger;
 }
 
 export class JobManager {
   private readonly jobs = new Map<string, InternalJobRecord>();
-  private readonly lanes = new Map<JobLane, LaneState>();
+  private readonly queue: string[] = [];
+  private activeCount = 0;
+  private readonly concurrency: number;
 
   constructor(private readonly options: JobManagerOptions) {
     fs.mkdirSync(options.jobsRootDir, { recursive: true });
-
-    this.lanes.set('browser', {
-      activeCount: 0,
-      concurrency: Math.max(1, options.browserConcurrency),
-      queue: [],
-    });
-
-    this.lanes.set('replay', {
-      activeCount: 0,
-      concurrency: Math.max(1, options.replayConcurrency),
-      queue: [],
-    });
+    this.concurrency = Math.max(1, options.concurrency);
   }
 
   createJob<TInput, TResult>(request: CreateJobRequest<TInput, TResult>): JobSummary<TResult> {
@@ -64,7 +46,6 @@ export class JobManager {
     const record: InternalJobRecord<TResult> = {
       id: jobId,
       type: request.type,
-      lane: request.lane,
       status: 'queued',
       createdAt: new Date().toISOString(),
       input: redactSensitiveData(request.inputPreview),
@@ -79,7 +60,7 @@ export class JobManager {
 
     this.jobs.set(jobId, record as InternalJobRecord);
     this.persist(record);
-    this.enqueue(record);
+    this.enqueue(jobId);
 
     return this.toPublicRecord(record);
   }
@@ -99,55 +80,21 @@ export class JobManager {
     return this.toPublicRecord(record);
   }
 
-  getCompletedJob<TResult>(jobId: string, expectedType?: JobType): JobSummary<TResult> {
-    const job = this.getJob(jobId) as JobSummary<TResult>;
-
-    if (expectedType && job.type !== expectedType) {
-      throw new AppError({
-        message: `Job ${jobId} is not a ${expectedType} job.`,
-        statusCode: 400,
-        code: 'INVALID_JOB_TYPE',
-        expose: true,
-      });
-    }
-
-    if (job.status !== 'completed') {
-      throw new AppError({
-        message: `Job ${jobId} is not completed yet. Current status: ${job.status}.`,
-        statusCode: 409,
-        code: 'JOB_NOT_COMPLETED',
-        expose: true,
-      });
-    }
-
-    return job;
+  private enqueue(jobId: string): void {
+    this.queue.push(jobId);
+    this.drainQueue();
   }
 
-  private enqueue(record: InternalJobRecord): void {
-    const lane = this.lanes.get(record.lane);
-    if (!lane) {
-      throw new Error(`Unknown job lane: ${record.lane}`);
-    }
-
-    lane.queue.push(record.id);
-    this.drainLane(record.lane);
-  }
-
-  private drainLane(laneName: JobLane): void {
-    const lane = this.lanes.get(laneName);
-    if (!lane) {
-      return;
-    }
-
-    while (lane.activeCount < lane.concurrency && lane.queue.length > 0) {
-      const jobId = lane.queue.shift()!;
+  private drainQueue(): void {
+    while (this.activeCount < this.concurrency && this.queue.length > 0) {
+      const jobId = this.queue.shift()!;
       const record = this.jobs.get(jobId);
 
       if (!record) {
         continue;
       }
 
-      lane.activeCount += 1;
+      this.activeCount += 1;
       void this.runJob(record)
         .catch((error: unknown) => {
           this.options.logger.error('Unhandled job execution error', {
@@ -156,8 +103,8 @@ export class JobManager {
           });
         })
         .finally(() => {
-          lane.activeCount = Math.max(0, lane.activeCount - 1);
-          this.drainLane(laneName);
+          this.activeCount = Math.max(0, this.activeCount - 1);
+          this.drainQueue();
         });
     }
   }
@@ -176,7 +123,6 @@ export class JobManager {
     this.persist(record);
 
     jobLogger.info('Job started', {
-      lane: record.lane,
       input: record.input,
     });
 
@@ -229,7 +175,6 @@ export class JobManager {
     const output: JobSummary<TResult> = {
       id: record.id,
       type: record.type,
-      lane: record.lane,
       status: record.status as JobStatus,
       createdAt: record.createdAt,
       input: record.input,

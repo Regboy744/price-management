@@ -10,18 +10,6 @@ export function createJobRoutes(context: AppContext): Router {
   router.get('/health', asyncHandler(async (request, response) => controller.health(request, response)));
   router.get('/jobs', asyncHandler(async (request, response) => controller.listJobs(request, response)));
   router.post(
-    '/jobs/capture',
-    asyncHandler(async (request, response) => controller.createCaptureJob(request, response))
-  );
-  router.post(
-    '/jobs/replay',
-    asyncHandler(async (request, response) => controller.createReplayJob(request, response))
-  );
-  router.post(
-    '/jobs/sweep',
-    asyncHandler(async (request, response) => controller.createSweepJob(request, response))
-  );
-  router.post(
     '/jobs/scrape',
     asyncHandler(async (request, response) => controller.createScrapeJob(request, response))
   );

@@ -42,24 +42,6 @@ export interface AppEnvironment {
     autoLogin: boolean;
     keepSignedIn: boolean;
   };
-  captureDefaults: {
-    reportUrl: string;
-    headless: boolean;
-    timeoutMs: number;
-    applySelects: boolean;
-    selectDelayMs: number;
-    browserActionTimeoutMs: number;
-    selectPostbackTimeoutMs: number;
-    freshProfile: boolean;
-    renderTimeoutMs: number;
-    postRenderCaptureWaitMs: number;
-    preferredCaptureTimeoutMs: number;
-    forcedAsyncRetries: number;
-  };
-  replayDefaults: {
-    requestDelayMs: number;
-    applyFormOverrides: boolean;
-  };
   sweepDefaults: {
     reportUrl: string;
     headless: boolean;
@@ -78,7 +60,6 @@ export interface AppEnvironment {
   };
   queue: {
     browserConcurrency: number;
-    replayConcurrency: number;
   };
 }
 
@@ -110,24 +91,6 @@ export function loadAppEnvironment(): AppEnvironment {
       autoLogin,
       keepSignedIn: envBool(process.env['MS_KEEP_SIGNED_IN'], false),
     },
-    captureDefaults: {
-      reportUrl: DEFAULT_REPORT_URL,
-      headless: envBool(process.env['HEADLESS'], false),
-      timeoutMs: readPositiveInteger('REPORT_SURFACE_TIMEOUT_MS', 300_000),
-      applySelects: !envBool(process.env['SKIP_SELECTS'], false),
-      selectDelayMs: readNonNegativeInteger('SELECT_DELAY_MS', 1_000),
-      browserActionTimeoutMs: readPositiveInteger('BROWSER_ACTION_TIMEOUT_MS', 15_000),
-      selectPostbackTimeoutMs: readPositiveInteger('SELECT_POSTBACK_TIMEOUT_MS', 6_000),
-      freshProfile: envBool(process.env['FRESH_PROFILE'], true),
-      renderTimeoutMs: readPositiveInteger('REPORT_RENDER_TIMEOUT_MS', 180_000),
-      postRenderCaptureWaitMs: readNonNegativeInteger('POST_RENDER_CAPTURE_WAIT_MS', 3_000),
-      preferredCaptureTimeoutMs: readNonNegativeInteger('PREFERRED_CAPTURE_TIMEOUT_MS', 5_000),
-      forcedAsyncRetries: readNonNegativeInteger('FORCED_ASYNC_RETRIES', 2),
-    },
-    replayDefaults: {
-      requestDelayMs: readNonNegativeInteger('REQUEST_DELAY_MS', pagination.delayBetweenRequests),
-      applyFormOverrides: !envBool(process.env['SCRAPE_SKIP_FORM_OVERRIDES'], false),
-    },
     sweepDefaults: {
       reportUrl: DEFAULT_REPORT_URL,
       headless: envBool(process.env['HEADLESS'], false),
@@ -146,7 +109,6 @@ export function loadAppEnvironment(): AppEnvironment {
     },
     queue: {
       browserConcurrency: readPositiveInteger('BROWSER_JOB_CONCURRENCY', 1),
-      replayConcurrency: readPositiveInteger('REPLAY_JOB_CONCURRENCY', 2),
     },
   };
 }

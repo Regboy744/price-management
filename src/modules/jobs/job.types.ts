@@ -1,7 +1,6 @@
 import type { Logger } from '../../config/logger.js';
 
-export type JobType = 'capture' | 'replay' | 'sweep';
-export type JobLane = 'browser' | 'replay';
+export type JobType = 'scrape';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 export interface JobArtifacts {
@@ -20,7 +19,6 @@ export interface JobErrorSummary {
 export interface JobSummary<TResult = unknown> {
   id: string;
   type: JobType;
-  lane: JobLane;
   status: JobStatus;
   createdAt: string;
   startedAt?: string;
@@ -39,7 +37,6 @@ export interface JobRunnerContext {
 
 export interface CreateJobRequest<TInput, TResult> {
   type: JobType;
-  lane: JobLane;
   inputPreview: TInput;
   run: (context: JobRunnerContext) => Promise<TResult>;
 }
