@@ -3,7 +3,12 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Logger } from '../../config/logger.js';
 import { listFilesRecursively, resolveJobDirectory } from '../../config/paths.js';
-import { NotFoundError, toAppError, type AppError } from '../../shared/errors/app-error.js';
+import {
+  getPublicErrorMessage,
+  NotFoundError,
+  toAppError,
+  type AppError,
+} from '../../shared/errors/app-error.js';
 import { redactSensitiveData } from '../../shared/utils/redact.js';
 import type {
   CreateJobRequest,
@@ -154,7 +159,7 @@ export class JobManager {
   private toErrorSummary(error: AppError): JobErrorSummary {
     return {
       code: error.code,
-      message: error.message,
+      message: getPublicErrorMessage(error),
       details: error.expose ? error.details : undefined,
     };
   }

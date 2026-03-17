@@ -6,7 +6,15 @@ import { attachNetworkCapture } from '../browser.js';
 import { getSelectOptions, waitForDropdownEnabled } from '../dom.js';
 import { waitForReportSurface } from '../report.js';
 import type { CaptureOptions } from '../types.js';
-import { resolveBrowserActionTimeoutMs, sleep, withTimeout } from '../utils.js';
+import {
+  isAbortError,
+  OperationAbortedError,
+  resolveBrowserActionTimeoutMs,
+  sleep,
+  sleepWithAbort,
+  throwIfAborted,
+  toAbortError,
+} from '../utils.js';
 import { createProductsCsvAppender, sanitizeStoreName } from './output.js';
 import { runCascadedSweep, SweepResumeRequiredError } from './sweep.js';
 import type {
@@ -201,12 +209,14 @@ async function processStore(
   errorLogPath: string,
   storeIndex: number,
   totalStores: number,
-  startupDelayMs: number
+  startupDelayMs: number,
+  abortSignal?: AbortSignal
 ): Promise<ParallelStoreResult> {
   const prefix = `[tab-${storeIndex + 1}/${totalStores}]`;
   const storeLabel = `${prefix} ${store.text}`;
   const maxAttempts = 1 + readStoreRetryCount();
   const maxFreshTabResumes = readMaxFreshTabResumes();
+  const abortFallbackMessage = `${storeLabel}: store execution aborted.`;
 
   let attempt = 1;
   let resumeCount = 0;
@@ -216,8 +226,10 @@ async function processStore(
 
   try {
     while (attempt <= maxAttempts) {
+      throwIfAborted(abortSignal, abortFallbackMessage);
+
       if (startupDelayMs > 0 && attempt === 1 && resumeCount === 0 && !resumeAfter) {
-        await sleep(startupDelayMs);
+        await sleepWithAbort(startupDelayMs, abortSignal, abortFallbackMessage);
       }
 
       const openLabel = resumeAfter
@@ -228,9 +240,26 @@ async function processStore(
       let page: Page | undefined;
       let captureContext: ReturnType<typeof attachNetworkCapture> | null = null;
       let detachDiagnostics: (() => void) | null = null;
+      const closePageOnAbort = (): void => {
+        if (!page || page.isClosed()) {
+          return;
+        }
+
+        console.warn(`${storeLabel}: abort received, closing tab...`);
+        void Promise.race([
+          page.close().catch(() => null),
+          sleep(PAGE_CLOSE_TIMEOUT_MS),
+        ]);
+      };
+
+      abortSignal?.addEventListener('abort', closePageOnAbort, { once: true });
 
       try {
+        throwIfAborted(abortSignal, abortFallbackMessage);
+
         page = await browser.newPage();
+        throwIfAborted(abortSignal, abortFallbackMessage);
+
         const actionTimeoutMs = resolveBrowserActionTimeoutMs(captureOptions);
         page.setDefaultTimeout(actionTimeoutMs);
         page.setDefaultNavigationTimeout(Math.max(60_000, captureOptions.timeoutMs));
@@ -257,7 +286,8 @@ async function processStore(
         const reportSurface = await waitForReportSurface(
           page,
           captureOptions.timeoutMs,
-          actionTimeoutMs
+          actionTimeoutMs,
+          abortSignal
         );
         if (!reportSurface) {
           throw new Error(`${storeLabel}: could not detect report surface.`);
@@ -293,6 +323,7 @@ async function processStore(
           stats,
           resumeAfter,
           throwOnFreeze: true,
+          abortSignal,
         });
 
         const captureStats = getCaptureStats();
@@ -308,6 +339,19 @@ async function processStore(
           stats,
         };
       } catch (error) {
+        if (abortSignal?.aborted || isAbortError(error)) {
+          const message = toAbortError(abortSignal?.reason ?? error, abortFallbackMessage).message;
+          console.error(`${storeLabel}: ABORTED — ${message}`);
+          appendError(errorLogPath, `${storeLabel}: aborted: ${message}`);
+          return {
+            storeName: store.text,
+            storeValue: store.value,
+            csvPath,
+            stats,
+            error: message,
+          };
+        }
+
         if (error instanceof SweepResumeRequiredError) {
           resumeAfter = error.resumeAfter;
           resumeCount += 1;
@@ -328,7 +372,7 @@ async function processStore(
           const resumeMessage = `${storeLabel}: reopening fresh tab to resume after ${formatResumeCursor(resumeAfter)} (${resumeCount}/${maxFreshTabResumes})`;
           console.warn(resumeMessage);
           appendError(errorLogPath, resumeMessage);
-          await sleep(1_000);
+          await sleepWithAbort(1_000, abortSignal, abortFallbackMessage);
           continue;
         }
 
@@ -350,7 +394,7 @@ async function processStore(
           resumeAfter = null;
           resumeCount = 0;
           attempt += 1;
-          await sleep(1_000);
+          await sleepWithAbort(1_000, abortSignal, abortFallbackMessage);
           continue;
         }
 
@@ -362,6 +406,8 @@ async function processStore(
           error: message,
         };
       } finally {
+        abortSignal?.removeEventListener('abort', closePageOnAbort);
+
         if (detachDiagnostics) {
           detachDiagnostics();
         }
@@ -388,6 +434,21 @@ async function processStore(
       stats,
       error: `${storeLabel}: exhausted retries without result.`,
     };
+  } catch (error) {
+    if (abortSignal?.aborted || isAbortError(error)) {
+      const message = toAbortError(abortSignal?.reason ?? error, abortFallbackMessage).message;
+      console.error(`${storeLabel}: ABORTED — ${message}`);
+      appendError(errorLogPath, `${storeLabel}: aborted: ${message}`);
+      return {
+        storeName: store.text,
+        storeValue: store.value,
+        csvPath,
+        stats,
+        error: message,
+      };
+    }
+
+    throw error;
   } finally {
     await csvAppender.close().catch(() => null);
   }
@@ -413,6 +474,59 @@ function aggregateStats(results: ParallelStoreResult[]): SweepStats {
   }
 
   return totals;
+}
+
+async function processStoreWithWallClockTimeout(
+  browser: BrowserContext,
+  store: SweepOption,
+  captureOptions: CaptureOptions,
+  requestDelayMs: number,
+  limits: SweepLimits,
+  csvPath: string,
+  errorLogPath: string,
+  storeIndex: number,
+  totalStores: number,
+  startupDelayMs: number,
+  storeWallClockTimeoutMs: number
+): Promise<ParallelStoreResult> {
+  if (storeWallClockTimeoutMs <= 0) {
+    return processStore(
+      browser,
+      store,
+      captureOptions,
+      requestDelayMs,
+      limits,
+      csvPath,
+      errorLogPath,
+      storeIndex,
+      totalStores,
+      startupDelayMs
+    );
+  }
+
+  const controller = new AbortController();
+  const timeoutMessage = `Store ${store.text} exceeded wall-clock timeout of ${storeWallClockTimeoutMs}ms`;
+  const timeoutHandle = setTimeout(() => {
+    controller.abort(new OperationAbortedError(timeoutMessage));
+  }, storeWallClockTimeoutMs);
+
+  try {
+    return await processStore(
+      browser,
+      store,
+      captureOptions,
+      requestDelayMs,
+      limits,
+      csvPath,
+      errorLogPath,
+      storeIndex,
+      totalStores,
+      startupDelayMs,
+      controller.signal
+    );
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
 }
 
 export async function runParallelSweep(
@@ -467,7 +581,7 @@ export async function runParallelSweep(
       const globalIndex = batchStart + indexInBatch;
       const csvPath = generateStoreCsvPath(input.outputDir, store);
 
-      const storePromise = processStore(
+      return processStoreWithWallClockTimeout(
         input.browser,
         store,
         input.captureOptions,
@@ -477,29 +591,9 @@ export async function runParallelSweep(
         input.errorLogPath,
         globalIndex,
         stores.length,
-        indexInBatch * staggerMs
+        indexInBatch * staggerMs,
+        storeWallClockTimeoutMs
       );
-
-      if (storeWallClockTimeoutMs <= 0) {
-        return storePromise;
-      }
-
-      return withTimeout(
-        storePromise,
-        storeWallClockTimeoutMs,
-        () => new Error(`Store ${store.text} exceeded wall-clock timeout of ${storeWallClockTimeoutMs}ms`)
-      ).catch((error): ParallelStoreResult => {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[tab-${globalIndex + 1}/${stores.length}] ${message}`);
-        appendError(input.errorLogPath, message);
-        return {
-          storeName: store.text,
-          storeValue: store.value,
-          csvPath,
-          stats: createEmptyStats(),
-          error: message,
-        };
-      });
     });
 
     const batchResults = await Promise.allSettled(batchPromises);

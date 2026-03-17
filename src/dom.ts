@@ -1,16 +1,25 @@
 import type { Page, ElementHandle } from 'playwright-core';
 import type { SelectorMatch, SelectedOption, SelectOption } from './types.js';
-import { sleep, TimedActionError, withTimeout } from './utils.js';
+import {
+  sleep,
+  sleepWithAbort,
+  throwIfAborted,
+  TimedActionError,
+  withTimeout,
+} from './utils.js';
 
 export async function findFirstSelector(
   page: Page,
   selectors: string[],
   timeoutMs: number,
-  actionTimeoutMs = 0
+  actionTimeoutMs = 0,
+  abortSignal?: AbortSignal
 ): Promise<SelectorMatch | null> {
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
+    throwIfAborted(abortSignal, 'Selector search aborted');
+
     try {
       for (const selector of selectors) {
         const handle = await withTimeout(
@@ -28,7 +37,7 @@ export async function findFirstSelector(
       }
       // Frame may be detached during navigation (e.g. Entra redirect) — retry
     }
-    await sleep(250);
+    await sleepWithAbort(250, abortSignal, 'Selector search aborted');
   }
 
   return null;
@@ -138,11 +147,14 @@ export async function waitForDropdownEnabled(
   page: Page,
   selector: string,
   timeoutMs: number,
-  actionTimeoutMs = 0
+  actionTimeoutMs = 0,
+  abortSignal?: AbortSignal
 ): Promise<boolean> {
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
+    throwIfAborted(abortSignal, `Dropdown wait aborted: ${selector}`);
+
     const state = await withTimeout(
       page.$eval(selector, (el) => {
         const select = el as HTMLSelectElement;
@@ -165,7 +177,7 @@ export async function waitForDropdownEnabled(
       return true;
     }
 
-    await sleep(250);
+    await sleepWithAbort(250, abortSignal, `Dropdown wait aborted: ${selector}`);
   }
 
   return false;
@@ -232,11 +244,14 @@ export async function waitForPostbackOrStateChange(
   getCaptureCount: () => number,
   beforeViewState: string,
   timeoutMs: number,
-  actionTimeoutMs = 0
+  actionTimeoutMs = 0,
+  abortSignal?: AbortSignal
 ): Promise<string> {
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
+    throwIfAborted(abortSignal, 'Postback wait aborted');
+
     if (getCaptureCount() > beforeCaptureCount) {
       return 'network';
     }
@@ -246,7 +261,7 @@ export async function waitForPostbackOrStateChange(
       return 'viewstate';
     }
 
-    await sleep(250);
+    await sleepWithAbort(250, abortSignal, 'Postback wait aborted');
   }
 
   return 'timeout';

@@ -69,7 +69,7 @@ export const sweepFields = {
 } as const satisfies Record<string, SweepDropdownField>;
 
 export const fixedSelections = {
-  saleable: '1',
+  saleable: '2',
   orderable: '1',
   mainSupplierOnly: '1',
   suppliers: '3',

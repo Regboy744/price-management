@@ -8,7 +8,8 @@ import type {
 } from './types.js';
 import {
   resolveBrowserActionTimeoutMs,
-  sleep,
+  sleepWithAbort,
+  throwIfAborted,
   TimedActionError,
   withTimeout,
 } from './utils.js';
@@ -18,11 +19,14 @@ import { getHiddenFieldValue, waitForPostbackOrStateChange } from './dom.js';
 export async function waitForReportSurface(
   page: Page,
   timeoutMs: number,
-  actionTimeoutMs = 15_000
+  actionTimeoutMs = 15_000,
+  abortSignal?: AbortSignal
 ): Promise<ReportSurfaceState | null> {
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
+    throwIfAborted(abortSignal, 'Report surface wait aborted');
+
     const state = await withTimeout(
       page.evaluate(() => {
         const currentUrl = window.location.href;
@@ -65,7 +69,7 @@ export async function waitForReportSurface(
       return state;
     }
 
-    await sleep(500);
+    await sleepWithAbort(500, abortSignal, 'Report surface wait aborted');
   }
 
   return null;
@@ -78,7 +82,8 @@ export async function waitForReportPageState(
     requireEanHeader?: boolean;
     requireReportTitle?: boolean;
   },
-  actionTimeoutMs = 15_000
+  actionTimeoutMs = 15_000,
+  abortSignal?: AbortSignal
 ): Promise<ReportPageState> {
   const start = Date.now();
   const { title, header } = REPORT_CONTENT_MARKERS;
@@ -93,6 +98,8 @@ export async function waitForReportPageState(
   };
 
   while (Date.now() - start < timeoutMs) {
+    throwIfAborted(abortSignal, 'Report render wait aborted');
+
     const state = await withTimeout(
       page.evaluate(
         ([titleMarker, headerMarker]: [string, string]) => {
@@ -162,7 +169,7 @@ export async function waitForReportPageState(
       return state;
     }
 
-    await sleep(400);
+    await sleepWithAbort(400, abortSignal, 'Report render wait aborted');
   }
 
   const expectedMarkers: string[] = [];
@@ -186,8 +193,11 @@ export async function triggerReservedAsyncLoadTarget(
   page: Page,
   getCaptureCount: () => number,
   timeoutMs: number,
-  actionTimeoutMs: number
+  actionTimeoutMs: number,
+  abortSignal?: AbortSignal
 ): Promise<string> {
+  throwIfAborted(abortSignal, 'Preferred capture retry aborted');
+
   const beforeCaptureCount = getCaptureCount();
   const beforeViewState = await getHiddenFieldValue(page, '#__VIEWSTATE', actionTimeoutMs);
 
@@ -196,9 +206,12 @@ export async function triggerReservedAsyncLoadTarget(
   try {
     triggerOk = await withTimeout(
       page.evaluate(() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        if (typeof (globalThis as any).__doPostBack === 'function') {
-          (globalThis as any).__doPostBack(
+        const pageGlobal = globalThis as typeof globalThis & {
+          __doPostBack?: (eventTarget: string, eventArgument: string) => void;
+        };
+
+        if (typeof pageGlobal.__doPostBack === 'function') {
+          pageGlobal.__doPostBack(
             'ReportViewerControl$ctl09$Reserved_AsyncLoadTarget',
             ''
           );
@@ -261,10 +274,11 @@ export async function triggerReservedAsyncLoadTarget(
     getCaptureCount,
     beforeViewState,
     timeoutMs,
-    actionTimeoutMs
+    actionTimeoutMs,
+    abortSignal
   );
 
-  await sleep(150);
+  await sleepWithAbort(150, abortSignal, 'Preferred capture retry aborted');
   return result;
 }
 
@@ -329,16 +343,23 @@ async function waitForPreferredNetworkCapture(
   captures: NetworkCapture[],
   minSequenceExclusive: number,
   timeoutMs: number,
-  pollIntervalMs = 250
+  pollIntervalMs = 250,
+  abortSignal?: AbortSignal
 ): Promise<NetworkCapture | null> {
   const maxWaitMs = Math.max(0, timeoutMs);
   const start = Date.now();
 
   while (Date.now() - start <= maxWaitMs) {
+    throwIfAborted(abortSignal, 'Preferred capture wait aborted');
+
     const preferred = pickLatestUsableNetworkCapture(captures, minSequenceExclusive, true);
     if (preferred) return preferred;
     if (maxWaitMs === 0) break;
-    await sleep(Math.max(50, pollIntervalMs));
+    await sleepWithAbort(
+      Math.max(50, pollIntervalMs),
+      abortSignal,
+      'Preferred capture wait aborted'
+    );
   }
 
   return null;
@@ -349,8 +370,11 @@ export async function ensurePreferredCapture(
   captures: NetworkCapture[],
   minSequenceExclusive: number,
   options: CaptureOptions,
-  getCaptureCount: () => number
+  getCaptureCount: () => number,
+  abortSignal?: AbortSignal
 ): Promise<PreferredCaptureResult> {
+  throwIfAborted(abortSignal, 'Preferred capture resolution aborted');
+
   const preferredCaptureTimeoutMs = Math.max(0, options.preferredCaptureTimeoutMs);
   const forcedAsyncRetries = Math.max(0, Math.floor(options.forcedAsyncRetries));
 
@@ -363,7 +387,9 @@ export async function ensurePreferredCapture(
   let preferred = await waitForPreferredNetworkCapture(
     captures,
     minSequenceExclusive,
-    preferredCaptureTimeoutMs
+    preferredCaptureTimeoutMs,
+    250,
+    abortSignal
   );
 
   if (preferred) {
@@ -379,6 +405,8 @@ export async function ensurePreferredCapture(
   const actionTimeoutMs = resolveBrowserActionTimeoutMs(options);
 
   for (let attempt = 1; attempt <= forcedAsyncRetries; attempt++) {
+    throwIfAborted(abortSignal, 'Preferred capture resolution aborted');
+
     console.log(
       `Preferred ctl09 payload not captured yet. Forcing reserved async postback (${attempt}/${forcedAsyncRetries})...`
     );
@@ -388,13 +416,20 @@ export async function ensurePreferredCapture(
       page,
       getCaptureCount,
       asyncTriggerTimeoutMs,
-      actionTimeoutMs
+      actionTimeoutMs,
+      abortSignal
     );
     forcedAsyncResults.push(result);
     console.log(`Forced reserved async postback result: ${result}`);
 
     const asyncCaptureWaitMs = Math.max(500, Math.floor(options.preferredCaptureTimeoutMs));
-    preferred = await waitForPreferredNetworkCapture(captures, minSequenceExclusive, asyncCaptureWaitMs);
+    preferred = await waitForPreferredNetworkCapture(
+      captures,
+      minSequenceExclusive,
+      asyncCaptureWaitMs,
+      250,
+      abortSignal
+    );
 
     if (preferred) {
       return {

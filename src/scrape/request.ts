@@ -1,4 +1,10 @@
 import axios, { type AxiosResponse } from 'axios';
+import {
+  isAbortError,
+  sleepWithAbort,
+  throwIfAborted,
+  toAbortError,
+} from '../utils.js';
 
 const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = 45_000;
 const DEFAULT_HTTP_REQUEST_RETRIES = 2;
@@ -16,14 +22,6 @@ function envNonNegativeInteger(name: string, fallback: number): number {
   }
 
   return Math.floor(parsed);
-}
-
-function sleep(ms: number): Promise<void> {
-  if (ms <= 0) {
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isRetriableStatus(status: number): boolean {
@@ -65,8 +63,11 @@ function isRetriableRequestError(error: unknown): boolean {
 export async function sendRequest(
   url: string,
   headers: Record<string, string>,
-  body: string
+  body: string,
+  abortSignal?: AbortSignal
 ): Promise<AxiosResponse<string>> {
+  throwIfAborted(abortSignal, 'SSRS request aborted');
+
   const timeoutMs = Math.max(
     5_000,
     envNonNegativeInteger('HTTP_REQUEST_TIMEOUT_MS', DEFAULT_HTTP_REQUEST_TIMEOUT_MS)
@@ -84,11 +85,14 @@ export async function sendRequest(
       const response = await axios.post<string>(url, body, {
         headers,
         timeout: timeoutMs,
+        signal: abortSignal,
         maxRedirects: 0,
         validateStatus: () => true,
         responseType: 'text',
         transformResponse: [(raw) => raw],
       });
+
+      throwIfAborted(abortSignal, 'SSRS request aborted');
 
       const retryableStatus = isRetriableStatus(response.status);
       const shouldRetry = retryableStatus && attempt <= retries;
@@ -98,12 +102,16 @@ export async function sendRequest(
         console.warn(
           `HTTP ${response.status} from SSRS request (attempt ${attempt}/${retries + 1}), retrying in ${backoffMs}ms...`
         );
-        await sleep(backoffMs);
+        await sleepWithAbort(backoffMs, abortSignal, 'SSRS request aborted');
         continue;
       }
 
       return response;
     } catch (error) {
+      if (abortSignal?.aborted || isAbortError(error)) {
+        throw toAbortError(abortSignal?.reason ?? error, 'SSRS request aborted');
+      }
+
       lastError = error;
 
       const shouldRetry = attempt <= retries && isRetriableRequestError(error);
@@ -117,7 +125,7 @@ export async function sendRequest(
       console.warn(
         `HTTP request transient failure on attempt ${attempt}/${retries + 1}: ${message}. Retrying in ${backoffMs}ms...`
       );
-      await sleep(backoffMs);
+      await sleepWithAbort(backoffMs, abortSignal, 'SSRS request aborted');
     }
   }
 

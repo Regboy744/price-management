@@ -147,6 +147,7 @@ export function attachNetworkCapture(page: Page): AppBrowserContext {
   let droppedCount = 0;
   let droppedBytes = 0;
   let lastDropWarningAt = 0;
+  let captureGeneration = 0;
   let detached = false;
 
   console.log(
@@ -191,6 +192,7 @@ export function attachNetworkCapture(page: Page): AppBrowserContext {
   };
 
   const clearCaptures = (): void => {
+    captureGeneration += 1;
     captures.length = 0;
     retainedBytes = 0;
   };
@@ -205,6 +207,8 @@ export function attachNetworkCapture(page: Page): AppBrowserContext {
       const body = request.postData() || '';
       if (!body) return;
 
+      const requestGeneration = captureGeneration;
+
       // Playwright's request.headers() does NOT include cookie-related headers.
       // Use allHeaders() for the full set including cookies.
       // Since the event handler is sync but allHeaders() is async, we handle
@@ -218,6 +222,10 @@ export function attachNetworkCapture(page: Page): AppBrowserContext {
           const params = new URLSearchParams(body);
           const initialViewState = params.get('__VIEWSTATE') || '';
           if (!initialViewState && !params.get('NavigationCorrector$NewViewState')) return;
+
+          if (detached || requestGeneration !== captureGeneration) {
+            return;
+          }
 
           captureCount += 1;
 
@@ -258,6 +266,7 @@ export function attachNetworkCapture(page: Page): AppBrowserContext {
     }
 
     detached = true;
+    captureGeneration += 1;
     page.off('request', onRequest);
   };
 

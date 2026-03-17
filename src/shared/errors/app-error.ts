@@ -61,6 +61,15 @@ export class ConflictError extends AppError {
   }
 }
 
+const DEFAULT_INTERNAL_ERROR_MESSAGE = 'Internal server error';
+
+export function getPublicErrorMessage(
+  error: Pick<AppError, 'message' | 'expose'>,
+  fallbackMessage = DEFAULT_INTERNAL_ERROR_MESSAGE
+): string {
+  return error.expose ? error.message : fallbackMessage;
+}
+
 export function toAppError(error: unknown): AppError {
   if (error instanceof AppError) {
     return error;

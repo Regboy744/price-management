@@ -15,7 +15,8 @@ import {
 import { waitForReportPageState, waitForReportSurface, ensurePreferredCapture, pickLatestUsableCapture } from '../report.js';
 import {
   resolveBrowserActionTimeoutMs,
-  sleep,
+  sleepWithAbort,
+  throwIfAborted,
   TimedActionError,
   withTimeout,
 } from '../utils.js';
@@ -39,6 +40,7 @@ interface SweepRunInput {
   getCaptureCount: () => number;
   clearCaptures?: () => void;
   getCaptureStats?: () => CaptureStats;
+  abortSignal?: AbortSignal;
   captureOptions: CaptureOptions;
   requestDelayMs: number;
   limits: SweepLimits;
@@ -84,6 +86,20 @@ export class SweepResumeRequiredError extends Error {
   }
 }
 
+const DEFAULT_FAMILY_SELECT_TIMEOUT_MS = 5_000;
+
+function readFamilySelectTimeoutMs(): number {
+  const raw = process.env['FAMILY_SELECT_TIMEOUT_MS'];
+  if (raw === undefined || raw === null || raw.trim() === '') {
+    return DEFAULT_FAMILY_SELECT_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_FAMILY_SELECT_TIMEOUT_MS;
+  }
+  return Math.floor(parsed);
+}
+
 function toSweepOptions(options: SelectOption[]): SweepOption[] {
   return options
     .filter((option) => option.value.trim().length > 0)
@@ -103,6 +119,13 @@ function limitOptions(options: SweepOption[], max: number | null): SweepOption[]
 function appendError(errorLogPath: string, message: string): void {
   fs.mkdirSync(path.dirname(errorLogPath), { recursive: true });
   fs.appendFileSync(errorLogPath, `[${new Date().toISOString()}] ${message}\n`, 'utf8');
+}
+
+function throwIfSweepAborted(
+  input: SweepRunInput,
+  fallbackMessage = 'Sweep aborted'
+): void {
+  throwIfAborted(input.abortSignal, fallbackMessage);
 }
 
 function isRetriableSweepError(message: string): boolean {
@@ -156,6 +179,41 @@ function isResumeCombinationError(error: unknown): boolean {
 
   const normalized = String(error instanceof Error ? error.message : error || '').toLowerCase();
   return normalized.includes('timed out') || normalized.includes('timeout');
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isFamilyDropdownTimeoutMessage(message: string): boolean {
+  const normalized = String(message || '').toLowerCase();
+  return normalized.includes('read dropdown state #reportviewercontrol_ctl04_ctl27_ddvalue timed out');
+}
+
+function isFamilyRenderTimeoutMessage(message: string): boolean {
+  const normalized = String(message || '').toLowerCase();
+  return (
+    normalized.includes('read hidden field #__viewstate timed out') ||
+    normalized.includes('read report page state timed out') ||
+    normalized.includes('timed out waiting for report render markers after view report click')
+  );
+}
+
+function isSkippableFamilyFailure(error: unknown): boolean {
+  const message = toErrorMessage(error);
+  const normalized = message.toLowerCase();
+
+  return (
+    isPageBrokenError(message) ||
+    isFamilyDropdownTimeoutMessage(message) ||
+    isFamilyRenderTimeoutMessage(message) ||
+    (normalized.includes('family group:') &&
+      (normalized.includes(' is not available') ||
+        normalized.includes('selection did not stick') ||
+        normalized.includes('dropdown stayed disabled') ||
+        normalized.includes('timed out') ||
+        normalized.includes('timeout')))
+  );
 }
 
 function createEmptyStats(): SweepStats {
@@ -321,15 +379,17 @@ function throwFreshTabResume(
 async function recoverPage(
   page: Page,
   reportUrl: string,
-  prefix: string
+  prefix: string,
+  abortSignal?: AbortSignal
 ): Promise<boolean> {
   try {
+    throwIfAborted(abortSignal, `${prefix}Page recovery aborted.`);
     console.log(`${prefix}Recovering page after SSRS error (reloading report)...`);
     await page.goto(reportUrl, {
       waitUntil: 'domcontentloaded',
       timeout: 60_000,
     });
-    const surface = await waitForReportSurface(page, 45_000);
+    const surface = await waitForReportSurface(page, 45_000, 15_000, abortSignal);
     if (!surface) {
       console.error(`${prefix}Recovery failed: report surface not detected after reload.`);
       return false;
@@ -337,6 +397,8 @@ async function recoverPage(
     console.log(`${prefix}Page recovered, report surface ready.`);
     return true;
   } catch (error) {
+    throwIfAborted(abortSignal, `${prefix}Page recovery aborted.`);
+
     const msg = error instanceof Error ? error.message : String(error);
     console.error(`${prefix}Recovery failed: ${msg}`);
     return false;
@@ -356,6 +418,7 @@ async function reapplySelections(
   prefix: string
 ): Promise<boolean> {
   try {
+    throwIfSweepAborted(input, `${prefix}Selection re-apply aborted.`);
     console.log(`${prefix}Re-applying selections after recovery...`);
 
     await ensureDropdownSelection(
@@ -405,6 +468,8 @@ async function reapplySelections(
     console.log(`${prefix}Selections re-applied successfully.`);
     return true;
   } catch (error) {
+    throwIfSweepAborted(input, `${prefix}Selection re-apply aborted.`);
+
     const msg = error instanceof Error ? error.message : String(error);
     console.error(`${prefix}Failed to re-apply selections: ${msg}`);
     return false;
@@ -449,9 +514,18 @@ async function resolveOptions(
   selector: string,
   startFromSecond: boolean,
   maxItems: number | null,
-  actionTimeoutMs: number
+  actionTimeoutMs: number,
+  abortSignal?: AbortSignal
 ): Promise<OptionSet> {
-  const enabled = await waitForDropdownEnabled(page, selector, 45_000, actionTimeoutMs);
+  throwIfAborted(abortSignal, `Option resolution aborted: ${selector}`);
+
+  const enabled = await waitForDropdownEnabled(
+    page,
+    selector,
+    45_000,
+    actionTimeoutMs,
+    abortSignal
+  );
   if (!enabled) {
     throw new Error(`Dropdown stayed disabled: ${selector}`);
   }
@@ -476,9 +550,17 @@ async function ensureDropdownSelection(
   targetValue: string,
   waitForPostback: boolean
 ): Promise<SweepOption> {
+  throwIfSweepAborted(input, `${label}: selection aborted`);
+
   const actionTimeoutMs = resolveBrowserActionTimeoutMs(input.captureOptions);
 
-  const enabled = await waitForDropdownEnabled(page, selector, 45_000, actionTimeoutMs);
+  const enabled = await waitForDropdownEnabled(
+    page,
+    selector,
+    45_000,
+    actionTimeoutMs,
+    input.abortSignal
+  );
   if (!enabled) {
     throw new Error(`${label}: dropdown stayed disabled (${selector})`);
   }
@@ -509,14 +591,15 @@ async function ensureDropdownSelection(
         input.getCaptureCount,
         beforeViewState,
         Math.max(1_000, input.captureOptions.selectPostbackTimeoutMs),
-        actionTimeoutMs
+        actionTimeoutMs,
+        input.abortSignal
       );
 
       if (result === 'timeout') {
         console.warn(`${label}: no postback/state change detected, continuing.`);
       }
     } else {
-      await sleep(150);
+      await sleepWithAbort(150, input.abortSignal, `${label}: selection aborted`);
     }
   }
 
@@ -525,7 +608,11 @@ async function ensureDropdownSelection(
     throw new Error(`${label}: selection did not stick (target=${targetValue}, actual=${selected.value || 'none'})`);
   }
 
-  await sleep(Math.max(0, input.captureOptions.selectDelayMs));
+  await sleepWithAbort(
+    Math.max(0, input.captureOptions.selectDelayMs),
+    input.abortSignal,
+    `${label}: selection aborted`
+  );
   return {
     value: selected.value,
     text: selected.text || target.text,
@@ -578,12 +665,19 @@ async function ensureExpand(input: SweepRunInput): Promise<void> {
   );
 }
 
-async function clickViewReport(page: Page, actionTimeoutMs: number): Promise<void> {
+async function clickViewReport(
+  page: Page,
+  actionTimeoutMs: number,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  throwIfAborted(abortSignal, 'View Report aborted');
+
   const buttonMatch = await findFirstSelector(
     page,
     [VIEW_REPORT_BUTTON_SELECTOR],
     20_000,
-    actionTimeoutMs
+    actionTimeoutMs,
+    abortSignal
   );
   if (!buttonMatch) {
     throw new Error('View Report button not found.');
@@ -609,7 +703,7 @@ async function clickViewReport(page: Page, actionTimeoutMs: number): Promise<voi
     actionTimeoutMs,
     () => new TimedActionError('View Report click', actionTimeoutMs)
   );
-  await sleep(200);
+  await sleepWithAbort(200, abortSignal, 'View Report aborted');
 }
 
 function logOptions(
@@ -625,6 +719,8 @@ function logOptions(
 }
 
 export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats> {
+  throwIfSweepAborted(input);
+
   const prefix = input.logPrefix ? `${input.logPrefix} ` : '';
   const stats = input.stats ?? createEmptyStats();
   const initialResume = input.resumeAfter ?? null;
@@ -641,7 +737,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
       sweepFields.store.selector,
       false,
       input.limits.maxStores,
-      actionTimeoutMs
+      actionTimeoutMs,
+      input.abortSignal
     );
     logOptions(sweepFields.store.label, storeOptionSet, false, prefix);
     storeCandidates = storeOptionSet.iterate;
@@ -650,6 +747,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
   const storeResumeInfo = getResumeStartInfo('store', storeCandidates, initialResume);
 
   for (let storeIndex = storeResumeInfo.startIndex; storeIndex < storeCandidates.length; storeIndex += 1) {
+    throwIfSweepAborted(input);
+
     const storeCandidate = storeCandidates[storeIndex]!;
     const storeResume =
       storeResumeInfo.carryResume && storeResumeInfo.resumeIndex === storeIndex ? initialResume : null;
@@ -675,7 +774,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
       sweepFields.department.selector,
       startFromSecondSelections.department,
       input.limits.maxDepartments,
-      actionTimeoutMs
+      actionTimeoutMs,
+      input.abortSignal
     );
     logOptions(sweepFields.department.label, departmentOptions, true, prefix);
 
@@ -695,6 +795,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
       departmentIndex < departmentOptions.iterate.length;
       departmentIndex += 1
     ) {
+      throwIfSweepAborted(input);
+
       const departmentCandidate = departmentOptions.iterate[departmentIndex]!;
       let department: SweepOption;
 
@@ -708,6 +810,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
           sweepFields.department.waitForPostback
         );
       } catch (error) {
+        throwIfSweepAborted(input, 'Department selection aborted');
+
         if (input.throwOnFreeze && isResumeSelectionError(error)) {
           throwFreshTabResume(
             input,
@@ -738,9 +842,12 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
           sweepFields.subdepartment.selector,
           startFromSecondSelections.subdepartment,
           input.limits.maxSubdepartments,
-          actionTimeoutMs
+          actionTimeoutMs,
+          input.abortSignal
         );
       } catch (error) {
+        throwIfSweepAborted(input, 'Subdepartment option resolution aborted');
+
         if (input.throwOnFreeze && isResumeSelectionError(error)) {
           throwFreshTabResume(
             input,
@@ -777,6 +884,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
         subdepartmentIndex < subdepartmentOptions.iterate.length;
         subdepartmentIndex += 1
       ) {
+        throwIfSweepAborted(input);
+
         const subdepartmentCandidate = subdepartmentOptions.iterate[subdepartmentIndex]!;
         let subdepartment: SweepOption;
 
@@ -790,6 +899,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
             sweepFields.subdepartment.waitForPostback
           );
         } catch (error) {
+          throwIfSweepAborted(input, 'Subdepartment selection aborted');
+
           if (input.throwOnFreeze && isResumeSelectionError(error)) {
             throwFreshTabResume(
               input,
@@ -822,9 +933,12 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
             sweepFields.commodity.selector,
             startFromSecondSelections.commodity,
             input.limits.maxCommodities,
-            actionTimeoutMs
+            actionTimeoutMs,
+            input.abortSignal
           );
         } catch (error) {
+          throwIfSweepAborted(input, 'Commodity option resolution aborted');
+
           if (input.throwOnFreeze && isResumeSelectionError(error)) {
             throwFreshTabResume(
               input,
@@ -862,6 +976,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
           commodityIndex < commodityOptions.iterate.length;
           commodityIndex += 1
         ) {
+          throwIfSweepAborted(input);
+
           const commodityCandidate = commodityOptions.iterate[commodityIndex]!;
           let commodity: SweepOption;
 
@@ -875,6 +991,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
               sweepFields.commodity.waitForPostback
             );
           } catch (error) {
+            throwIfSweepAborted(input, 'Commodity selection aborted');
+
             if (input.throwOnFreeze && isResumeSelectionError(error)) {
               throwFreshTabResume(
                 input,
@@ -900,17 +1018,106 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
               : null;
 
           let familyOptions: OptionSet;
-
-          try {
-            familyOptions = await resolveOptions(
+          const resolveFamilyOptions = async (): Promise<OptionSet> =>
+            resolveOptions(
               input.page,
               sweepFields.family.selector,
               startFromSecondSelections.family,
               input.limits.maxFamilies,
-              actionTimeoutMs
+              actionTimeoutMs,
+              input.abortSignal
             );
+
+          try {
+            familyOptions = await resolveFamilyOptions();
           } catch (error) {
-            if (input.throwOnFreeze && isResumeSelectionError(error)) {
+            throwIfSweepAborted(input, 'Family option resolution aborted');
+
+            const familyOptionsMessage = toErrorMessage(error);
+            const recoverableFamilyOptionsError =
+              isResumeSelectionError(error) ||
+              isPageBrokenError(familyOptionsMessage) ||
+              isFamilyDropdownTimeoutMessage(familyOptionsMessage);
+
+            if (recoverableFamilyOptionsError) {
+              const commodityLabel = `${store.text} > ${department.text} > ${subdepartment.text} > ${commodity.text}`;
+              console.warn(
+                `${prefix}Family options failed for ${commodity.text}, recovering before retry: ${familyOptionsMessage}`
+              );
+
+              const recovered = await recoverPage(
+                input.page,
+                input.captureOptions.reportUrl,
+                prefix,
+                input.abortSignal
+              );
+              const reapplied = recovered
+                ? await reapplySelections(
+                    input,
+                    { store, department, subdepartment, commodity },
+                    prefix
+                  )
+                : false;
+
+              if (recovered && reapplied) {
+                try {
+                  familyOptions = await resolveFamilyOptions();
+                } catch (retryError) {
+                  const retryMessage = toErrorMessage(retryError);
+                  appendError(
+                    input.errorLogPath,
+                    `[ghost-family][family-options] ${commodityLabel}: ${retryMessage}`
+                  );
+
+                  if (input.throwOnFreeze && isResumeSelectionError(retryError)) {
+                    throwFreshTabResume(
+                      input,
+                      createResumeCursor(
+                        {
+                          store: createResumeCheckpoint(store, storeIndex),
+                          department: createResumeCheckpoint(department, departmentIndex),
+                          subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
+                          commodity: createResumeCheckpoint(commodity, commodityIndex),
+                        },
+                        'family',
+                        `Family options unavailable after recovery: ${retryMessage}`
+                      ),
+                      { store, department, subdepartment, commodity }
+                    );
+                  }
+
+                  throw retryError;
+                }
+              } else {
+                const recoveryReason = !recovered
+                  ? `Family options recovery failed: ${familyOptionsMessage}`
+                  : `Family options re-apply failed: ${familyOptionsMessage}`;
+
+                appendError(
+                  input.errorLogPath,
+                  `[ghost-family][family-options] ${commodityLabel}: ${recoveryReason}`
+                );
+
+                if (input.throwOnFreeze) {
+                  throwFreshTabResume(
+                    input,
+                    createResumeCursor(
+                      {
+                        store: createResumeCheckpoint(store, storeIndex),
+                        department: createResumeCheckpoint(department, departmentIndex),
+                        subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
+                        commodity: createResumeCheckpoint(commodity, commodityIndex),
+                      },
+                      'family',
+                      recoveryReason
+                    ),
+                    { store, department, subdepartment, commodity }
+                  );
+                }
+
+                throw error;
+              }
+            } else if (input.throwOnFreeze && isResumeSelectionError(error)) {
               throwFreshTabResume(
                 input,
                 createResumeCursor(
@@ -920,8 +1127,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                     subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
                     commodity: createResumeCheckpoint(commodity, commodityIndex),
                   },
-                  'commodity',
-                  error instanceof Error ? error.message : String(error)
+                  'family',
+                  familyOptionsMessage
                 ),
                 { store, department, subdepartment, commodity }
               );
@@ -946,24 +1153,44 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
             familyIndex < familyOptions.iterate.length;
             familyIndex += 1
           ) {
+            throwIfSweepAborted(input);
+
             const familyCandidate = familyOptions.iterate[familyIndex]!;
             let family: SweepOption | undefined;
 
+            const familySelectTimeoutMs = readFamilySelectTimeoutMs();
+
             try {
-              family = await ensureDropdownSelection(
-                input.page,
-                input,
-                sweepFields.family.selector,
-                sweepFields.family.label,
-                familyCandidate.value,
-                sweepFields.family.waitForPostback
+              family = await withTimeout(
+                ensureDropdownSelection(
+                  input.page,
+                  input,
+                  sweepFields.family.selector,
+                  sweepFields.family.label,
+                  familyCandidate.value,
+                  sweepFields.family.waitForPostback
+                ),
+                familySelectTimeoutMs,
+                () => new TimedActionError(`Family selection ${familyCandidate.text}`, familySelectTimeoutMs)
               );
             } catch (familyError) {
-              const familyMsg = familyError instanceof Error ? familyError.message : String(familyError);
+              throwIfSweepAborted(input, 'Family selection aborted');
 
-              if (input.throwOnFreeze && isResumeSelectionError(familyError)) {
-                stats.combinationsVisited += 1;
-                stats.combinationsFailed += 1;
+              const familyMsg = toErrorMessage(familyError);
+              const isRecoverable = isResumeSelectionError(familyError) || isPageBrokenError(familyMsg);
+
+              if (!isRecoverable) {
+                throw familyError;
+              }
+
+              // Log the ghost/broken family for later review.
+              stats.combinationsVisited += 1;
+              stats.combinationsFailed += 1;
+              const ghostLabel = `${store.text} > ${department.text} > ${subdepartment.text} > ${commodity.text} > ${familyCandidate.text}`;
+              console.warn(`${prefix}Skipping ghost/broken family: ${familyCandidate.text} — ${familyMsg}`);
+              appendError(input.errorLogPath, `[ghost-family][family-select] ${ghostLabel}: ${familyMsg}`);
+
+              const resumeAfterFamily = (reason: string): never => {
                 throwFreshTabResume(
                   input,
                   createResumeCursor(
@@ -975,31 +1202,37 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                       family: createResumeCheckpoint(familyCandidate, familyIndex),
                     },
                     'family',
-                    familyMsg
+                    reason
                   ),
                   { store, department, subdepartment, commodity, family: familyCandidate }
                 );
-              }
-
-              if (!isPageBrokenError(familyMsg)) {
-                throw familyError;
-              }
+              };
 
               if (consecutiveRecoveries >= 3) {
-                console.error(
-                  `${prefix}Too many consecutive page recoveries (${consecutiveRecoveries}), skipping remaining families for ${commodity.text}.`
-                );
+                const reason = `Too many consecutive family recoveries (${consecutiveRecoveries}) while skipping ${familyCandidate.text}: ${familyMsg}`;
+                if (input.throwOnFreeze) {
+                  resumeAfterFamily(reason);
+                }
+
+                console.error(`${prefix}${reason}`);
                 break;
               }
 
               consecutiveRecoveries += 1;
-              console.warn(
-                `${prefix}Family selection failed (page broken), recovering (${consecutiveRecoveries}/3)...`
-              );
-              await sleep(1_000 * consecutiveRecoveries);
+              await sleepWithAbort(1_000, input.abortSignal, 'Family recovery wait aborted');
 
-              const recovered = await recoverPage(input.page, input.captureOptions.reportUrl, prefix);
+              const recovered = await recoverPage(
+                input.page,
+                input.captureOptions.reportUrl,
+                prefix,
+                input.abortSignal
+              );
               if (!recovered) {
+                const reason = `Page recovery failed while skipping family ${familyCandidate.text}: ${familyMsg}`;
+                if (input.throwOnFreeze) {
+                  resumeAfterFamily(reason);
+                }
+
                 console.error(`${prefix}Page recovery failed, skipping remaining families for ${commodity.text}.`);
                 break;
               }
@@ -1010,27 +1243,16 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                 prefix
               );
               if (!reapplied) {
+                const reason = `Re-apply failed while skipping family ${familyCandidate.text}: ${familyMsg}`;
+                if (input.throwOnFreeze) {
+                  resumeAfterFamily(reason);
+                }
+
                 console.error(`${prefix}Re-apply failed, skipping remaining families for ${commodity.text}.`);
                 break;
               }
 
-              try {
-                family = await ensureDropdownSelection(
-                  input.page,
-                  input,
-                  sweepFields.family.selector,
-                  sweepFields.family.label,
-                  familyCandidate.value,
-                  sweepFields.family.waitForPostback
-                );
-              } catch (retryError) {
-                const retryMsg = retryError instanceof Error ? retryError.message : String(retryError);
-                stats.combinationsFailed += 1;
-                stats.combinationsVisited += 1;
-                console.error(`Combination failed: family selection failed after recovery: ${retryMsg}`);
-                appendError(input.errorLogPath, `[recovery-retry] family ${familyCandidate.text}: ${retryMsg}`);
-                continue;
-              }
+              continue;
             }
 
             if (!family) {
@@ -1052,6 +1274,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
             let finalErrorMessage = 'Unknown combination failure.';
 
             for (let combinationAttempt = 1; combinationAttempt <= 2; combinationAttempt += 1) {
+              throwIfSweepAborted(input);
+
               try {
                 await ensureExpand(input);
 
@@ -1063,20 +1287,23 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                   | null = null;
 
                 for (let captureAttempt = 1; captureAttempt <= 2; captureAttempt += 1) {
+                  throwIfSweepAborted(input);
+
                   const beforeCaptureCount = input.getCaptureCount();
-                  await clickViewReport(input.page, actionTimeoutMs);
+                  await clickViewReport(input.page, actionTimeoutMs, input.abortSignal);
                   console.log(`[${combo}] waiting for report render state...`);
 
                   await waitForReportPageState(
                     input.page,
                     Math.max(10_000, input.captureOptions.renderTimeoutMs),
                     { requireEanHeader: false },
-                    actionTimeoutMs
+                    actionTimeoutMs,
+                    input.abortSignal
                   );
 
                   const waitMs = Math.max(0, input.captureOptions.postRenderCaptureWaitMs);
                   if (waitMs > 0) {
-                    await sleep(waitMs);
+                    await sleepWithAbort(waitMs, input.abortSignal, `[${combo}] capture wait aborted`);
                   }
 
                   const preferred = await ensurePreferredCapture(
@@ -1084,7 +1311,8 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                     input.captures,
                     beforeCaptureCount,
                     input.captureOptions,
-                    input.getCaptureCount
+                    input.getCaptureCount,
+                    input.abortSignal
                   );
 
                   let selectedCapture = preferred.selectedCapture;
@@ -1117,6 +1345,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                       bootstrapBody: selectedCapture.bootstrapDataRaw,
                       delayMs: input.requestDelayMs,
                       maxPages: null,
+                      abortSignal: input.abortSignal,
                     },
                     {
                       collectRows: false,
@@ -1163,10 +1392,16 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                 combinationSucceeded = true;
                 break;
               } catch (error) {
+                throwIfSweepAborted(input, `[${combo}] combination aborted`);
+
                 const message = error instanceof Error ? error.message : String(error);
                 finalErrorMessage = message;
 
-                if (input.throwOnFreeze && isResumeCombinationError(error)) {
+                if (
+                  input.throwOnFreeze &&
+                  isResumeCombinationError(error) &&
+                  !isSkippableFamilyFailure(message)
+                ) {
                   stats.combinationsFailed += 1;
                   throwFreshTabResume(
                     input,
@@ -1190,7 +1425,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                   console.warn(
                     `[${combo}] transient failure on attempt ${combinationAttempt}/2: ${message}`
                   );
-                  await sleep(750);
+                  await sleepWithAbort(750, input.abortSignal, `[${combo}] retry wait aborted`);
                   continue;
                 }
 
@@ -1210,44 +1445,111 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
               console.error(`Combination failed: ${fullMessage}`);
               appendError(input.errorLogPath, fullMessage);
 
-              if (isPageBrokenError(finalErrorMessage)) {
-                if (consecutiveRecoveries >= 3) {
-                  console.error(
-                    `${prefix}Too many consecutive page recoveries (${consecutiveRecoveries}), skipping remaining families for ${commodity.text}.`
+              const recoverableFamilyFailure = isSkippableFamilyFailure(finalErrorMessage);
+
+              if (recoverableFamilyFailure) {
+                const ghostLabel = `${store.text} > ${department.text} > ${subdepartment.text} > ${commodity.text} > ${family.text}`;
+                appendError(
+                  input.errorLogPath,
+                  `[ghost-family][family-render] ${ghostLabel}: ${finalErrorMessage}`
+                );
+
+                const resumeAfterFamily = (reason: string): never => {
+                  throwFreshTabResume(
+                    input,
+                    createResumeCursor(
+                      {
+                        store: createResumeCheckpoint(store, storeIndex),
+                        department: createResumeCheckpoint(department, departmentIndex),
+                        subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
+                        commodity: createResumeCheckpoint(commodity, commodityIndex),
+                        family: createResumeCheckpoint(family, familyIndex),
+                      },
+                      'family',
+                      reason
+                    ),
+                    selection
                   );
+                };
+
+                if (consecutiveRecoveries >= 3) {
+                  const reason = `Too many consecutive family recoveries (${consecutiveRecoveries}) after ${family.text}: ${finalErrorMessage}`;
+                  if (input.throwOnFreeze) {
+                    resumeAfterFamily(reason);
+                  }
+
+                  console.error(`${prefix}${reason}`);
                   break;
                 }
 
                 consecutiveRecoveries += 1;
                 console.warn(
-                  `${prefix}Page broken after combination failure, recovering (${consecutiveRecoveries}/3)...`
+                  `${prefix}Family render failed, recovering (${consecutiveRecoveries}/3)...`
                 );
-                await sleep(1_000 * consecutiveRecoveries);
+                await sleepWithAbort(
+                  1_000 * consecutiveRecoveries,
+                  input.abortSignal,
+                  'Family render recovery wait aborted'
+                );
 
                 const recovered = await recoverPage(
                   input.page,
                   input.captureOptions.reportUrl,
-                  prefix
+                  prefix,
+                  input.abortSignal
                 );
-                if (recovered) {
-                  const reapplied = await reapplySelections(
-                    input,
-                    { store, department, subdepartment, commodity },
-                    prefix
-                  );
-                  if (!reapplied) {
-                    console.error(
-                      `${prefix}Re-apply failed after recovery, skipping remaining families for ${commodity.text}.`
-                    );
-                    break;
+                if (!recovered) {
+                  const reason = `Page recovery failed after family ${family.text}: ${finalErrorMessage}`;
+                  if (input.throwOnFreeze) {
+                    resumeAfterFamily(reason);
                   }
-                } else {
+
                   console.error(
                     `${prefix}Page recovery failed, skipping remaining families for ${commodity.text}.`
                   );
                   break;
                 }
+
+                const reapplied = await reapplySelections(
+                  input,
+                  { store, department, subdepartment, commodity },
+                  prefix
+                );
+
+                if (!reapplied) {
+                  const reason = `Re-apply failed after family ${family.text}: ${finalErrorMessage}`;
+                  if (input.throwOnFreeze) {
+                    resumeAfterFamily(reason);
+                  }
+
+                  console.error(
+                    `${prefix}Re-apply failed after recovery, skipping remaining families for ${commodity.text}.`
+                  );
+                  break;
+                }
+
+                maybeLogSweepTelemetry(prefix, stats, input);
+                continue;
               }
+
+              if (input.throwOnFreeze && isResumeCombinationError(finalErrorMessage)) {
+                throwFreshTabResume(
+                  input,
+                  createResumeCursor(
+                    {
+                      store: createResumeCheckpoint(store, storeIndex),
+                      department: createResumeCheckpoint(department, departmentIndex),
+                      subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
+                      commodity: createResumeCheckpoint(commodity, commodityIndex),
+                      family: createResumeCheckpoint(family, familyIndex),
+                    },
+                    'family',
+                    finalErrorMessage
+                  ),
+                  selection
+                );
+              }
+
             }
 
             maybeLogSweepTelemetry(prefix, stats, input);

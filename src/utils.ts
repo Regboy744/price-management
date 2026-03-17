@@ -33,6 +33,123 @@ export class TimedActionError extends Error {
   }
 }
 
+interface ErrorWithCode extends Error {
+  code?: string;
+}
+
+function hasErrorCode(error: Error): error is ErrorWithCode {
+  return 'code' in error;
+}
+
+export class OperationAbortedError extends Error {
+  readonly reason: unknown;
+
+  constructor(message: string, reason?: unknown) {
+    super(message);
+    this.name = 'OperationAbortedError';
+    this.reason = reason;
+  }
+}
+
+export function toAbortError(
+  reason: unknown,
+  fallbackMessage = 'Operation aborted'
+): OperationAbortedError {
+  if (reason instanceof OperationAbortedError) {
+    return reason;
+  }
+
+  if (reason instanceof Error) {
+    return new OperationAbortedError(reason.message || fallbackMessage, reason);
+  }
+
+  if (typeof reason === 'string' && reason.trim().length > 0) {
+    return new OperationAbortedError(reason, reason);
+  }
+
+  return new OperationAbortedError(fallbackMessage, reason);
+}
+
+export function isAbortError(error: unknown): boolean {
+  if (error instanceof OperationAbortedError) {
+    return true;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return (
+    error.name === 'AbortError' ||
+    error.name === 'CanceledError' ||
+    (hasErrorCode(error) && error.code === 'ERR_CANCELED')
+  );
+}
+
+export function throwIfAborted(
+  signal?: AbortSignal,
+  fallbackMessage = 'Operation aborted'
+): void {
+  if (!signal?.aborted) {
+    return;
+  }
+
+  throw toAbortError(signal.reason, fallbackMessage);
+}
+
+export async function sleepWithAbort(
+  ms: number,
+  signal?: AbortSignal,
+  fallbackMessage = 'Operation aborted'
+): Promise<void> {
+  if (ms <= 0) {
+    throwIfAborted(signal, fallbackMessage);
+    return;
+  }
+
+  throwIfAborted(signal, fallbackMessage);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | null = null;
+
+    const cleanup = (): void => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+
+      signal?.removeEventListener('abort', onAbort);
+    };
+
+    const onAbort = (): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      reject(toAbortError(signal?.reason, fallbackMessage));
+    };
+
+    timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      resolve();
+    }, ms);
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    if (signal?.aborted) {
+      onAbort();
+    }
+  });
+}
+
 export async function withTimeout<T>(
   operation: Promise<T>,
   timeoutMs: number,

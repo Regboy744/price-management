@@ -1,6 +1,10 @@
 import type { ErrorRequestHandler } from 'express';
 import type { Logger } from '../../config/logger.js';
-import { AppError, toAppError } from '../../shared/errors/app-error.js';
+import {
+  AppError,
+  getPublicErrorMessage,
+  toAppError,
+} from '../../shared/errors/app-error.js';
 
 function normalizeRequestError(error: unknown): AppError {
   if (error instanceof SyntaxError && error.message.toLowerCase().includes('json')) {
@@ -36,7 +40,7 @@ export function createErrorHandler(logger: Logger): ErrorRequestHandler {
     response.status(appError.statusCode).json({
       error: {
         code: appError.code,
-        message: appError.message,
+        message: getPublicErrorMessage(appError),
         details: appError.expose ? appError.details : undefined,
         requestId,
       },

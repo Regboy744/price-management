@@ -63,6 +63,7 @@ export interface ScrapeReplayInput {
   bootstrapBody: string;
   delayMs: number;
   maxPages?: number | null;
+  abortSignal?: AbortSignal;
 }
 
 export interface ScrapeReplayHooks {

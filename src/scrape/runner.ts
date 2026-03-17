@@ -1,5 +1,5 @@
 import { eventTargets } from '../../config/ssrs.js';
-import { sleep } from '../utils.js';
+import { sleepWithAbort, throwIfAborted } from '../utils.js';
 import { extractPageInfo, extractProducts, extractReportHtml, extractStates } from './parser.js';
 import { buildNavigationBody } from './pagination.js';
 import { sendRequest } from './request.js';
@@ -45,9 +45,10 @@ interface ResponseData {
 async function requestResponseData(
   requestUrl: string,
   requestHeaders: Record<string, string>,
-  body: string
+  body: string,
+  abortSignal?: AbortSignal
 ): Promise<ResponseData> {
-  const response = await sendRequest(requestUrl, requestHeaders, body);
+  const response = await sendRequest(requestUrl, requestHeaders, body, abortSignal);
 
   return {
     status: response.status,
@@ -59,6 +60,10 @@ export async function scrapeFromBootstrap(
   input: ScrapeReplayInput,
   hooks: ScrapeReplayHooks = {}
 ): Promise<ScrapeReplayResult> {
+  const abortSignal = input.abortSignal;
+
+  throwIfAborted(abortSignal, 'Scrape replay aborted');
+
   const delayMs = Math.max(0, input.delayMs);
   const maxPages = input.maxPages ?? null;
   const collectRows = hooks.collectRows !== false;
@@ -70,7 +75,8 @@ export async function scrapeFromBootstrap(
   let responseData = await requestResponseData(
     input.requestUrl,
     requestHeaders,
-    baseFormParams.toString()
+    baseFormParams.toString(),
+    abortSignal
   );
 
   if (responseData.status >= 400) {
@@ -99,10 +105,11 @@ export async function scrapeFromBootstrap(
   responseData = { status: 0, data: '' };
 
   while (pageInfo.currentPage > 1) {
-    await sleep(delayMs);
+    throwIfAborted(abortSignal, 'Scrape replay aborted');
+    await sleepWithAbort(delayMs, abortSignal, 'Scrape replay aborted');
 
     const body = buildNavigationBody(baseFormParams, states, pageInfo.currentPage, eventTargets.previous);
-    responseData = await requestResponseData(input.requestUrl, requestHeaders, body);
+    responseData = await requestResponseData(input.requestUrl, requestHeaders, body, abortSignal);
 
     if (responseData.status >= 400) {
       throw new Error(`${label}Previous-page request failed with status ${responseData.status}`.trim());
@@ -120,6 +127,8 @@ export async function scrapeFromBootstrap(
   let totalRows = 0;
 
   while (true) {
+    throwIfAborted(abortSignal, 'Scrape replay aborted');
+
     const currentRows = extractProducts(reportHtml, pageInfo.currentPage);
     const pageMeta: ScrapePageInfo = {
       currentPage: pageInfo.currentPage,
@@ -136,6 +145,7 @@ export async function scrapeFromBootstrap(
 
     if (hooks.onPageRows) {
       await hooks.onPageRows(currentRows, pageMeta);
+      throwIfAborted(abortSignal, 'Scrape replay aborted');
     }
 
     const reachedPageLimit = maxPages !== null && pagesVisited.size >= maxPages;
@@ -145,10 +155,10 @@ export async function scrapeFromBootstrap(
 
     reportHtml = '';
 
-    await sleep(delayMs);
+    await sleepWithAbort(delayMs, abortSignal, 'Scrape replay aborted');
 
     const body = buildNavigationBody(baseFormParams, states, pageInfo.currentPage, eventTargets.next);
-    responseData = await requestResponseData(input.requestUrl, requestHeaders, body);
+    responseData = await requestResponseData(input.requestUrl, requestHeaders, body, abortSignal);
 
     if (responseData.status >= 400) {
       throw new Error(`${label}Next-page request failed with status ${responseData.status}`.trim());
