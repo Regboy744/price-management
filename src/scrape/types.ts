@@ -35,6 +35,7 @@ export interface ProductRow {
   lv: string;
   sv_code: string;
   description: string;
+  size: string;
   must_stock: string;
   delisted: string;
   store_selling_price: string;

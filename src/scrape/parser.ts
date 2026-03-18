@@ -38,8 +38,29 @@ export function toPlainText(html: string): string {
   );
 }
 
-function cleanDescription(value: string): string {
-  return value.replace(/\s*\|\s*/g, ' ').replace(/\s+/g, ' ').trim();
+function normalizeInlineText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function parseDescriptionParts(value: string): { description: string; size: string } {
+  const segments = value
+    .split('|')
+    .map((segment) => normalizeInlineText(segment))
+    .filter((segment) => segment.length > 0);
+
+  if (!segments.length) {
+    return {
+      description: '',
+      size: '',
+    };
+  }
+
+  const [description, ...sizeSegments] = segments;
+
+  return {
+    description,
+    size: sizeSegments.join(' | '),
+  };
 }
 
 function splitSupplierAndArticleLinking(value: string): { supplier: string; article_linking: string } {
@@ -203,6 +224,7 @@ export function extractProducts(reportHtml: string, pageNumber: number): Product
       continue;
     }
 
+    const descriptionParts = parseDescriptionParts(detailMatch[1]);
     const supplierFields = splitSupplierAndArticleLinking(detailMatch[10]);
 
     rows.push({
@@ -212,7 +234,8 @@ export function extractProducts(reportHtml: string, pageNumber: number): Product
       lu: headMatch[3],
       lv: headMatch[4],
       sv_code: headMatch[5],
-      description: cleanDescription(detailMatch[1]),
+      description: descriptionParts.description,
+      size: descriptionParts.size,
       must_stock: detailMatch[2],
       delisted: detailMatch[3] || '',
       store_selling_price: detailMatch[4],

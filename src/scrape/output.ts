@@ -22,6 +22,7 @@ const csvColumns: Array<{ label: string; key: keyof ProductRow }> = [
   { label: 'LV', key: 'lv' },
   { label: 'SV Code', key: 'sv_code' },
   { label: 'Description', key: 'description' },
+  { label: 'Size', key: 'size' },
   { label: 'Must Stock', key: 'must_stock' },
   { label: 'Delisted', key: 'delisted' },
   { label: 'Store Selling Price', key: 'store_selling_price' },
