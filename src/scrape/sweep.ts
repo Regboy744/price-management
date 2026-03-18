@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright-core';
 import { fixedSelections, startFromSecondSelections, sweepFields } from '../../config/sweep.js';
+import type { SweepDepth } from '../../config/sweep.js';
 import { VIEW_REPORT_BUTTON_SELECTOR } from '../../config/report.js';
 import type {
   CaptureOptions,
@@ -50,6 +51,7 @@ interface SweepRunInput {
   abortSignal?: AbortSignal;
   captureOptions: CaptureOptions;
   requestDelayMs: number;
+  sweepDepth: SweepDepth;
   limits: SweepLimits;
   csvAppender: ProductsCsvAppender;
   errorLogPath: string;
@@ -250,7 +252,7 @@ function enrichRowsWithSelectionContext(
     department: selection.department.text,
     subdepartment: selection.subdepartment.text,
     commodity_code: selection.commodity.text,
-    family_group: selection.family.text,
+    family_group: selection.family?.text,
   };
 
   return rows.map((row) => ({
@@ -513,7 +515,203 @@ function maybeLogSweepTelemetry(prefix: string, stats: SweepStats, input: SweepR
 }
 
 function selectionLabel(selection: SweepSelectionContext): string {
-  return `${selection.store.text} > ${selection.department.text} > ${selection.subdepartment.text} > ${selection.commodity.text} > ${selection.family.text}`;
+  return [
+    selection.store.text,
+    selection.department.text,
+    selection.subdepartment.text,
+    selection.commodity.text,
+    selection.family?.text,
+  ]
+    .filter((value): value is string => Boolean(value && value.trim().length > 0))
+    .join(' > ');
+}
+
+interface CombinationRunInput {
+  input: SweepRunInput;
+  selection: SweepSelectionContext;
+  stats: SweepStats;
+  resumePath: ResumePathContext;
+  resumeLevel: SweepResumeLevel;
+  actionTimeoutMs: number;
+}
+
+async function scrapeSelectionCombination({
+  input,
+  selection,
+  stats,
+  resumePath,
+  resumeLevel,
+  actionTimeoutMs,
+}: CombinationRunInput): Promise<string | null> {
+  const combo = selectionLabel(selection);
+  stats.combinationsVisited += 1;
+
+  let finalErrorMessage = 'Unknown combination failure.';
+
+  for (let combinationAttempt = 1; combinationAttempt <= 2; combinationAttempt += 1) {
+    throwIfSweepAborted(input);
+
+    try {
+      await ensureExpand(input);
+
+      let replayResult: ScrapeReplayResult | null = null;
+
+      for (let captureAttempt = 1; captureAttempt <= 2; captureAttempt += 1) {
+        throwIfSweepAborted(input);
+
+        const beforeCaptureCount = input.getCaptureCount();
+        await clickViewReport(input.page, actionTimeoutMs, input.abortSignal);
+        logDebug(`[${combo}] waiting for report render state...`);
+
+        await waitForReportPageState(
+          input.page,
+          Math.max(10_000, input.captureOptions.renderTimeoutMs),
+          undefined,
+          actionTimeoutMs,
+          input.abortSignal
+        );
+
+        const waitMs = Math.max(0, input.captureOptions.postRenderCaptureWaitMs);
+        if (waitMs > 0) {
+          await sleepWithAbort(waitMs, input.abortSignal, `[${combo}] capture wait aborted`);
+        }
+
+        const preferred = await ensurePreferredCapture(
+          input.page,
+          input.captures,
+          beforeCaptureCount,
+          input.captureOptions,
+          input.getCaptureCount,
+          input.abortSignal
+        );
+
+        let selectedCapture = preferred.selectedCapture;
+        let selectedSource = preferred.selectedBootstrapSource;
+
+        if (!selectedCapture) {
+          const fallbackCapture = pickLatestUsableCapture(input.captures, beforeCaptureCount);
+          if (fallbackCapture) {
+            selectedCapture = fallbackCapture;
+            selectedSource = 'network-usable-fallback';
+            logWarn(
+              `[${combo}] preferred payload missing, using fallback eventTarget=${fallbackCapture.eventTarget || 'n/a'}`
+            );
+          }
+        }
+
+        if (!selectedCapture) {
+          throw new Error('No usable network payload captured for current selection.');
+        }
+
+        logDebug(
+          `[${combo}] payload source: ${selectedSource} (capture attempt ${captureAttempt}/2)`
+        );
+
+        replayResult = await scrapeFromBootstrap(
+          {
+            requestUrl: selectedCapture.requestUrl,
+            requestHeaders: selectedCapture.requestHeaders,
+            cookieString: selectedCapture.cookieString,
+            bootstrapBody: selectedCapture.bootstrapDataRaw,
+            delayMs: input.requestDelayMs,
+            maxPages: null,
+            abortSignal: input.abortSignal,
+          },
+          {
+            collectRows: false,
+            phasePrefix: 'sweep',
+            logLabel: `[${combo}]`,
+            allowEmptyReport: true,
+            onPageRows: async (rows, pageMeta: ScrapePageInfo) => {
+              const rowsWithSelectionContext = enrichRowsWithSelectionContext(rows, selection);
+              const written = await input.csvAppender.appendRows(
+                rowsWithSelectionContext,
+                selection.store.text
+              );
+              stats.rowsWritten += written;
+              stats.pageRequests += 1;
+              logDebug(
+                `[${combo}] page ${pageMeta.currentPage}/${pageMeta.totalPages}: appended ${written} rows`
+              );
+            },
+          }
+        );
+
+        const replayReturnedNoRows = replayResult.totalRows === 0;
+
+        if (replayReturnedNoRows && replayResult.diagnostics.hasProductTableHeader) {
+          const diagnostics = [
+            `productHeader=${replayResult.diagnostics.hasProductTableHeader}`,
+            `rowCandidates=${replayResult.diagnostics.rowCandidateCount}`,
+            `debugResponse=${replayResult.diagnostics.debugResponsePath || '(none)'}`,
+            `debugReportHtml=${replayResult.diagnostics.debugReportHtmlPath || '(none)'}`,
+          ].join(', ');
+
+          if (captureAttempt < 2) {
+            logWarn(
+              `[${combo}] replay response contains the product table header but parsed 0 rows, retrying View Report once. Diagnostics: ${diagnostics}`
+            );
+            continue;
+          }
+
+          throw new Error(
+            `Replay response contains the product table header but parsed 0 rows. Diagnostics: ${diagnostics}`
+          );
+        }
+
+        if (replayReturnedNoRows) {
+          logInfo(
+            `[${combo}] accepted empty report result. Replay diagnostics: productHeader=${replayResult.diagnostics.hasProductTableHeader}, rowCandidates=${replayResult.diagnostics.rowCandidateCount}`
+          );
+        }
+
+        break;
+      }
+
+      if (!replayResult) {
+        throw new Error('Unable to scrape current selection after retries.');
+      }
+
+      stats.combinationsScraped += 1;
+      logDebug(
+        `[${combo}] scraped pages=${replayResult.pagesScraped.length}, rows=${replayResult.totalRows}`
+      );
+      return null;
+    } catch (error) {
+      throwIfSweepAborted(input, `[${combo}] combination aborted`);
+
+      const message = toErrorMessage(error);
+      finalErrorMessage = message;
+
+      const shouldSkipFreshTabResume =
+        resumeLevel === 'family' && isSkippableFamilyFailure(message);
+
+      if (input.throwOnFreeze && isResumeCombinationError(error) && !shouldSkipFreshTabResume) {
+        stats.combinationsFailed += 1;
+        throwFreshTabResume(
+          input,
+          createResumeCursor(resumePath, resumeLevel, message),
+          selection
+        );
+      }
+
+      const shouldRetry = combinationAttempt < 2 && isRetriableSweepError(message);
+      if (shouldRetry) {
+        logWarn(`[${combo}] transient failure on attempt ${combinationAttempt}/2: ${message}`);
+        await sleepWithAbort(750, input.abortSignal, `[${combo}] retry wait aborted`);
+        continue;
+      }
+
+      break;
+    } finally {
+      if (input.clearCaptures) {
+        input.clearCaptures();
+      }
+    }
+  }
+
+  stats.combinationsFailed += 1;
+  return finalErrorMessage;
 }
 
 async function resolveOptions(
@@ -1024,6 +1222,38 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
               ? subdepartmentResume
               : null;
 
+          if (input.sweepDepth === 'commodity') {
+            const selection: SweepSelectionContext = {
+              store,
+              department,
+              subdepartment,
+              commodity,
+            };
+            const finalErrorMessage = await scrapeSelectionCombination({
+              input,
+              selection,
+              stats,
+              resumePath: {
+                store: createResumeCheckpoint(store, storeIndex),
+                department: createResumeCheckpoint(department, departmentIndex),
+                subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
+                commodity: createResumeCheckpoint(commodity, commodityIndex),
+              },
+              resumeLevel: 'commodity',
+              actionTimeoutMs,
+            });
+
+            if (finalErrorMessage) {
+              const combo = selectionLabel(selection);
+              const fullMessage = `[${combo}] ${finalErrorMessage}`;
+              logError(`Combination failed: ${fullMessage}`);
+              appendError(input.errorLogPath, fullMessage);
+            }
+
+            maybeLogSweepTelemetry(prefix, stats, input);
+            continue;
+          }
+
           let familyOptions: OptionSet;
           const resolveFamilyOptions = async (): Promise<OptionSet> =>
             resolveOptions(
@@ -1274,285 +1504,42 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
               family,
             };
 
-            const combo = selectionLabel(selection);
-            stats.combinationsVisited += 1;
+            const finalErrorMessage = await scrapeSelectionCombination({
+              input,
+              selection,
+              stats,
+              resumePath: {
+                store: createResumeCheckpoint(store, storeIndex),
+                department: createResumeCheckpoint(department, departmentIndex),
+                subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
+                commodity: createResumeCheckpoint(commodity, commodityIndex),
+                family: createResumeCheckpoint(family, familyIndex),
+              },
+              resumeLevel: 'family',
+              actionTimeoutMs,
+            });
 
-            let combinationSucceeded = false;
-            let finalErrorMessage = 'Unknown combination failure.';
-
-            for (let combinationAttempt = 1; combinationAttempt <= 2; combinationAttempt += 1) {
-              throwIfSweepAborted(input);
-
-              try {
-                await ensureExpand(input);
-
-                let replayResult: ScrapeReplayResult | null = null;
-
-                for (let captureAttempt = 1; captureAttempt <= 2; captureAttempt += 1) {
-                  throwIfSweepAborted(input);
-
-                  const beforeCaptureCount = input.getCaptureCount();
-                  await clickViewReport(input.page, actionTimeoutMs, input.abortSignal);
-                  logDebug(`[${combo}] waiting for report render state...`);
-
-                  await waitForReportPageState(
-                    input.page,
-                    Math.max(10_000, input.captureOptions.renderTimeoutMs),
-                    undefined,
-                    actionTimeoutMs,
-                    input.abortSignal
-                  );
-
-                  const waitMs = Math.max(0, input.captureOptions.postRenderCaptureWaitMs);
-                  if (waitMs > 0) {
-                    await sleepWithAbort(waitMs, input.abortSignal, `[${combo}] capture wait aborted`);
-                  }
-
-                  const preferred = await ensurePreferredCapture(
-                    input.page,
-                    input.captures,
-                    beforeCaptureCount,
-                    input.captureOptions,
-                    input.getCaptureCount,
-                    input.abortSignal
-                  );
-
-                  let selectedCapture = preferred.selectedCapture;
-                  let selectedSource = preferred.selectedBootstrapSource;
-
-                  if (!selectedCapture) {
-                    const fallbackCapture = pickLatestUsableCapture(input.captures, beforeCaptureCount);
-                    if (fallbackCapture) {
-                      selectedCapture = fallbackCapture;
-                      selectedSource = 'network-usable-fallback';
-                      logWarn(
-                        `[${combo}] preferred payload missing, using fallback eventTarget=${fallbackCapture.eventTarget || 'n/a'}`
-                      );
-                    }
-                  }
-
-                  if (!selectedCapture) {
-                    throw new Error('No usable network payload captured for current selection.');
-                  }
-
-                  logDebug(
-                    `[${combo}] payload source: ${selectedSource} (capture attempt ${captureAttempt}/2)`
-                  );
-
-                  replayResult = await scrapeFromBootstrap(
-                    {
-                      requestUrl: selectedCapture.requestUrl,
-                      requestHeaders: selectedCapture.requestHeaders,
-                      cookieString: selectedCapture.cookieString,
-                      bootstrapBody: selectedCapture.bootstrapDataRaw,
-                      delayMs: input.requestDelayMs,
-                      maxPages: null,
-                      abortSignal: input.abortSignal,
-                    },
-                    {
-                      collectRows: false,
-                      phasePrefix: 'sweep',
-                      logLabel: `[${combo}]`,
-                      allowEmptyReport: true,
-                      onPageRows: async (rows, pageMeta: ScrapePageInfo) => {
-                        const rowsWithSelectionContext = enrichRowsWithSelectionContext(rows, selection);
-                        const written = await input.csvAppender.appendRows(
-                          rowsWithSelectionContext,
-                          selection.store.text
-                        );
-                        stats.rowsWritten += written;
-                        stats.pageRequests += 1;
-                        logDebug(
-                          `[${combo}] page ${pageMeta.currentPage}/${pageMeta.totalPages}: appended ${written} rows`
-                        );
-                      },
-                    }
-                  );
-
-                  const replayReturnedNoRows = replayResult.totalRows === 0;
-
-                  if (replayReturnedNoRows && replayResult.diagnostics.hasProductTableHeader) {
-                    const diagnostics = [
-                      `productHeader=${replayResult.diagnostics.hasProductTableHeader}`,
-                      `rowCandidates=${replayResult.diagnostics.rowCandidateCount}`,
-                      `debugResponse=${replayResult.diagnostics.debugResponsePath || '(none)'}`,
-                      `debugReportHtml=${replayResult.diagnostics.debugReportHtmlPath || '(none)'}`,
-                    ].join(', ');
-
-                    if (captureAttempt < 2) {
-                      logWarn(
-                        `[${combo}] replay response contains the product table header but parsed 0 rows, retrying View Report once. Diagnostics: ${diagnostics}`
-                      );
-                      continue;
-                    }
-
-                    throw new Error(
-                      `Replay response contains the product table header but parsed 0 rows. Diagnostics: ${diagnostics}`
-                    );
-                  }
-
-                  if (replayReturnedNoRows) {
-                    logInfo(
-                      `[${combo}] accepted empty report result. Replay diagnostics: productHeader=${replayResult.diagnostics.hasProductTableHeader}, rowCandidates=${replayResult.diagnostics.rowCandidateCount}`
-                    );
-                  }
-
-                  break;
-                }
-
-                if (!replayResult) {
-                  throw new Error('Unable to scrape current selection after retries.');
-                }
-
-                stats.combinationsScraped += 1;
-                logDebug(
-                  `[${combo}] scraped pages=${replayResult.pagesScraped.length}, rows=${replayResult.totalRows}`
-                );
-
-                combinationSucceeded = true;
-                break;
-              } catch (error) {
-                throwIfSweepAborted(input, `[${combo}] combination aborted`);
-
-                const message = error instanceof Error ? error.message : String(error);
-                finalErrorMessage = message;
-
-                if (
-                  input.throwOnFreeze &&
-                  isResumeCombinationError(error) &&
-                  !isSkippableFamilyFailure(message)
-                ) {
-                  stats.combinationsFailed += 1;
-                  throwFreshTabResume(
-                    input,
-                    createResumeCursor(
-                      {
-                        store: createResumeCheckpoint(store, storeIndex),
-                        department: createResumeCheckpoint(department, departmentIndex),
-                        subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
-                        commodity: createResumeCheckpoint(commodity, commodityIndex),
-                        family: createResumeCheckpoint(family, familyIndex),
-                      },
-                      'family',
-                      message
-                    ),
-                    selection
-                  );
-                }
-
-                const shouldRetry = combinationAttempt < 2 && isRetriableSweepError(message);
-                if (shouldRetry) {
-                  logWarn(
-                    `[${combo}] transient failure on attempt ${combinationAttempt}/2: ${message}`
-                  );
-                  await sleepWithAbort(750, input.abortSignal, `[${combo}] retry wait aborted`);
-                  continue;
-                }
-
-                break;
-              } finally {
-                if (input.clearCaptures) {
-                  input.clearCaptures();
-                }
-              }
+            if (!finalErrorMessage) {
+              consecutiveRecoveries = 0;
+              maybeLogSweepTelemetry(prefix, stats, input);
+              continue;
             }
 
-            if (combinationSucceeded) {
-              consecutiveRecoveries = 0;
-            } else {
-              stats.combinationsFailed += 1;
-              const fullMessage = `[${combo}] ${finalErrorMessage}`;
-              logError(`Combination failed: ${fullMessage}`);
-              appendError(input.errorLogPath, fullMessage);
+            const combo = selectionLabel(selection);
+            const fullMessage = `[${combo}] ${finalErrorMessage}`;
+            logError(`Combination failed: ${fullMessage}`);
+            appendError(input.errorLogPath, fullMessage);
 
-              const recoverableFamilyFailure = isSkippableFamilyFailure(finalErrorMessage);
+            const recoverableFamilyFailure = isSkippableFamilyFailure(finalErrorMessage);
 
-              if (recoverableFamilyFailure) {
-                const ghostLabel = `${store.text} > ${department.text} > ${subdepartment.text} > ${commodity.text} > ${family.text}`;
-                appendError(
-                  input.errorLogPath,
-                  `[ghost-family][family-render] ${ghostLabel}: ${finalErrorMessage}`
-                );
+            if (recoverableFamilyFailure) {
+              const ghostLabel = `${store.text} > ${department.text} > ${subdepartment.text} > ${commodity.text} > ${family.text}`;
+              appendError(
+                input.errorLogPath,
+                `[ghost-family][family-render] ${ghostLabel}: ${finalErrorMessage}`
+              );
 
-                const resumeAfterFamily = (reason: string): never => {
-                  throwFreshTabResume(
-                    input,
-                    createResumeCursor(
-                      {
-                        store: createResumeCheckpoint(store, storeIndex),
-                        department: createResumeCheckpoint(department, departmentIndex),
-                        subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
-                        commodity: createResumeCheckpoint(commodity, commodityIndex),
-                        family: createResumeCheckpoint(family, familyIndex),
-                      },
-                      'family',
-                      reason
-                    ),
-                    selection
-                  );
-                };
-
-                if (consecutiveRecoveries >= 3) {
-                  const reason = `Too many consecutive family recoveries (${consecutiveRecoveries}) after ${family.text}: ${finalErrorMessage}`;
-                  if (input.throwOnFreeze) {
-                    resumeAfterFamily(reason);
-                  }
-
-                  logError(`${prefix}${reason}`);
-                  break;
-                }
-
-                consecutiveRecoveries += 1;
-                logWarn(
-                  `${prefix}Family render failed, recovering (${consecutiveRecoveries}/3)...`
-                );
-                await sleepWithAbort(
-                  1_000 * consecutiveRecoveries,
-                  input.abortSignal,
-                  'Family render recovery wait aborted'
-                );
-
-                const recovered = await recoverPage(
-                  input.page,
-                  input.captureOptions.reportUrl,
-                  prefix,
-                  input.abortSignal
-                );
-                if (!recovered) {
-                  const reason = `Page recovery failed after family ${family.text}: ${finalErrorMessage}`;
-                  if (input.throwOnFreeze) {
-                    resumeAfterFamily(reason);
-                  }
-
-                  logError(
-                    `${prefix}Page recovery failed, skipping remaining families for ${commodity.text}.`
-                  );
-                  break;
-                }
-
-                const reapplied = await reapplySelections(
-                  input,
-                  { store, department, subdepartment, commodity },
-                  prefix
-                );
-
-                if (!reapplied) {
-                  const reason = `Re-apply failed after family ${family.text}: ${finalErrorMessage}`;
-                  if (input.throwOnFreeze) {
-                    resumeAfterFamily(reason);
-                  }
-
-                  logError(
-                    `${prefix}Re-apply failed after recovery, skipping remaining families for ${commodity.text}.`
-                  );
-                  break;
-                }
-
-                maybeLogSweepTelemetry(prefix, stats, input);
-                continue;
-              }
-
-              if (input.throwOnFreeze && isResumeCombinationError(finalErrorMessage)) {
+              const resumeAfterFamily = (reason: string): never => {
                 throwFreshTabResume(
                   input,
                   createResumeCursor(
@@ -1564,12 +1551,88 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                       family: createResumeCheckpoint(family, familyIndex),
                     },
                     'family',
-                    finalErrorMessage
+                    reason
                   ),
                   selection
                 );
+              };
+
+              if (consecutiveRecoveries >= 3) {
+                const reason = `Too many consecutive family recoveries (${consecutiveRecoveries}) after ${family.text}: ${finalErrorMessage}`;
+                if (input.throwOnFreeze) {
+                  resumeAfterFamily(reason);
+                }
+
+                logError(`${prefix}${reason}`);
+                break;
               }
 
+              consecutiveRecoveries += 1;
+              logWarn(
+                `${prefix}Family render failed, recovering (${consecutiveRecoveries}/3)...`
+              );
+              await sleepWithAbort(
+                1_000 * consecutiveRecoveries,
+                input.abortSignal,
+                'Family render recovery wait aborted'
+              );
+
+              const recovered = await recoverPage(
+                input.page,
+                input.captureOptions.reportUrl,
+                prefix,
+                input.abortSignal
+              );
+              if (!recovered) {
+                const reason = `Page recovery failed after family ${family.text}: ${finalErrorMessage}`;
+                if (input.throwOnFreeze) {
+                  resumeAfterFamily(reason);
+                }
+
+                logError(
+                  `${prefix}Page recovery failed, skipping remaining families for ${commodity.text}.`
+                );
+                break;
+              }
+
+              const reapplied = await reapplySelections(
+                input,
+                { store, department, subdepartment, commodity },
+                prefix
+              );
+
+              if (!reapplied) {
+                const reason = `Re-apply failed after family ${family.text}: ${finalErrorMessage}`;
+                if (input.throwOnFreeze) {
+                  resumeAfterFamily(reason);
+                }
+
+                logError(
+                  `${prefix}Re-apply failed after recovery, skipping remaining families for ${commodity.text}.`
+                );
+                break;
+              }
+
+              maybeLogSweepTelemetry(prefix, stats, input);
+              continue;
+            }
+
+            if (input.throwOnFreeze && isResumeCombinationError(finalErrorMessage)) {
+              throwFreshTabResume(
+                input,
+                createResumeCursor(
+                  {
+                    store: createResumeCheckpoint(store, storeIndex),
+                    department: createResumeCheckpoint(department, departmentIndex),
+                    subdepartment: createResumeCheckpoint(subdepartment, subdepartmentIndex),
+                    commodity: createResumeCheckpoint(commodity, commodityIndex),
+                    family: createResumeCheckpoint(family, familyIndex),
+                  },
+                  'family',
+                  finalErrorMessage
+                ),
+                selection
+              );
             }
 
             maybeLogSweepTelemetry(prefix, stats, input);

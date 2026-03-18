@@ -1,7 +1,10 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import path from 'node:path';
 
-type RuntimeLogLevel = 'debug' | 'info' | 'warn' | 'error';
+import type { LogLevel, Logger } from './config/logger.js';
+
+type RuntimeLogLevel = LogLevel;
 
 const LOG_LEVEL_ORDER: Record<RuntimeLogLevel, number> = {
   debug: 10,
@@ -10,10 +13,16 @@ const LOG_LEVEL_ORDER: Record<RuntimeLogLevel, number> = {
   error: 40,
 };
 
-const DEFAULT_CONSOLE_LEVEL: RuntimeLogLevel = 'info';
+const DEFAULT_CONSOLE_LEVEL: RuntimeLogLevel = 'warn';
 const DEFAULT_FILE_LEVEL: RuntimeLogLevel = 'debug';
 
+const runtimeLoggerStorage = new AsyncLocalStorage<Logger>();
+
 let fileStream: fs.WriteStream | null = null;
+
+export async function runWithRuntimeLogger<T>(logger: Logger, callback: () => Promise<T>): Promise<T> {
+  return runtimeLoggerStorage.run(logger, callback);
+}
 
 function parseLogLevel(value: string | undefined, fallback: RuntimeLogLevel): RuntimeLogLevel {
   const normalized = String(value || '')
@@ -71,6 +80,7 @@ function getFileStream(): fs.WriteStream | null {
 
 function writeRuntimeLog(level: RuntimeLogLevel, message: string): void {
   const line = formatLine(level, message);
+  const activeLogger = runtimeLoggerStorage.getStore();
 
   if (shouldWrite(level, getConsoleLevel())) {
     if (level === 'error') {
@@ -80,6 +90,11 @@ function writeRuntimeLog(level: RuntimeLogLevel, message: string): void {
     } else {
       console.log(line);
     }
+  }
+
+  if (activeLogger) {
+    activeLogger.writeToFiles(level, message, { source: 'runtime' });
+    return;
   }
 
   if (shouldWrite(level, getFileLevel())) {

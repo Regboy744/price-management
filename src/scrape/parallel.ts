@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { BrowserContext, Page } from 'playwright-core';
 import { sweepFields } from '../../config/sweep.js';
+import type { SweepDepth } from '../../config/sweep.js';
 import { attachNetworkCapture } from '../browser.js';
 import { getSelectOptions, waitForDropdownEnabled } from '../dom.js';
 import { waitForReportSurface } from '../report.js';
@@ -31,6 +32,7 @@ interface ParallelSweepInput {
   initialPage: Page;
   captureOptions: CaptureOptions;
   requestDelayMs: number;
+  sweepDepth: SweepDepth;
   limits: SweepLimits;
   storeCandidates?: SweepOption[];
   maxParallelTabs: number | null;
@@ -205,6 +207,7 @@ async function processStore(
   store: SweepOption,
   captureOptions: CaptureOptions,
   requestDelayMs: number,
+  sweepDepth: SweepDepth,
   limits: SweepLimits,
   csvPath: string,
   errorLogPath: string,
@@ -316,6 +319,7 @@ async function processStore(
           getCaptureStats,
           captureOptions,
           requestDelayMs,
+          sweepDepth,
           limits: sweepLimits,
           csvAppender,
           errorLogPath,
@@ -482,6 +486,7 @@ async function processStoreWithWallClockTimeout(
   store: SweepOption,
   captureOptions: CaptureOptions,
   requestDelayMs: number,
+  sweepDepth: SweepDepth,
   limits: SweepLimits,
   csvPath: string,
   errorLogPath: string,
@@ -496,6 +501,7 @@ async function processStoreWithWallClockTimeout(
       store,
       captureOptions,
       requestDelayMs,
+      sweepDepth,
       limits,
       csvPath,
       errorLogPath,
@@ -517,6 +523,7 @@ async function processStoreWithWallClockTimeout(
       store,
       captureOptions,
       requestDelayMs,
+      sweepDepth,
       limits,
       csvPath,
       errorLogPath,
@@ -587,6 +594,7 @@ export async function runParallelSweep(
         store,
         input.captureOptions,
         input.requestDelayMs,
+        input.sweepDepth,
         input.limits,
         csvPath,
         input.errorLogPath,

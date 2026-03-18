@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { DEFAULT_REPORT_URL } from '../../config/report.js';
+import { resolveSweepDepth } from '../../config/sweep.js';
 import { pagination } from '../../config/ssrs.js';
+import type { SweepDepth } from '../../config/sweep.js';
 import { envBool } from '../utils.js';
 
 function readInteger(name: string, fallback: number): number {
@@ -44,6 +46,7 @@ export interface AppEnvironment {
   };
   sweepDefaults: {
     reportUrl: string;
+    sweepDepth: SweepDepth;
     headless: boolean;
     timeoutMs: number;
     selectDelayMs: number;
@@ -93,6 +96,7 @@ export function loadAppEnvironment(): AppEnvironment {
     },
     sweepDefaults: {
       reportUrl: DEFAULT_REPORT_URL,
+      sweepDepth: resolveSweepDepth(process.env['SWEEP_DEPTH']),
       headless: envBool(process.env['HEADLESS'], false),
       timeoutMs: readPositiveInteger('REPORT_SURFACE_TIMEOUT_MS', 300_000),
       selectDelayMs: readNonNegativeInteger('SELECT_DELAY_MS', 1_000),

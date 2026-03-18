@@ -5,6 +5,14 @@ export interface SweepDropdownField {
   waitForPostback: boolean;
 }
 
+export type SweepDepth = 'commodity' | 'family';
+
+export const DEFAULT_SWEEP_DEPTH: SweepDepth = 'family';
+
+export function resolveSweepDepth(rawValue: string | undefined): SweepDepth {
+  return rawValue === 'commodity' ? 'commodity' : DEFAULT_SWEEP_DEPTH;
+}
+
 export const sweepFields = {
   store: {
     label: 'Store',

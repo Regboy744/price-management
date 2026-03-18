@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Logger } from '../../config/logger.js';
 import { listFilesRecursively, resolveJobDirectory } from '../../config/paths.js';
+import { runWithRuntimeLogger } from '../../runtime-log.js';
 import {
   getPublicErrorMessage,
   NotFoundError,
@@ -132,10 +133,12 @@ export class JobManager {
     });
 
     try {
-      const result = await record.run({
-        jobId: record.id,
-        jobDirectory: record.artifacts.jobDirectory,
-        logger: jobLogger,
+      const result = await runWithRuntimeLogger(jobLogger, async () => {
+        return record.run({
+          jobId: record.id,
+          jobDirectory: record.artifacts.jobDirectory,
+          logger: jobLogger,
+        });
       });
 
       record.status = 'completed';

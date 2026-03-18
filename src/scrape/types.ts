@@ -1,3 +1,5 @@
+import type { SweepDepth } from '../../config/sweep.js';
+
 export interface ParsedCurl {
   requestUrl: string;
   headers: Record<string, string>;
@@ -132,7 +134,7 @@ export interface SweepSelectionContext {
   department: SweepOption;
   subdepartment: SweepOption;
   commodity: SweepOption;
-  family: SweepOption;
+  family?: SweepOption;
 }
 
 export interface SweepStats {
@@ -164,6 +166,7 @@ export interface ScrapeAllOptions {
   preferredCaptureTimeoutMs: number;
   forcedAsyncRetries: number;
   requestDelayMs: number;
+  sweepDepth: SweepDepth;
   maxStores: number | null;
   maxDepartments: number | null;
   maxSubdepartments: number | null;
