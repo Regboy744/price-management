@@ -3,7 +3,13 @@ import path from 'node:path';
 import type { Page } from 'playwright-core';
 import { fixedSelections, startFromSecondSelections, sweepFields } from '../../config/sweep.js';
 import { VIEW_REPORT_BUTTON_SELECTOR } from '../../config/report.js';
-import type { CaptureOptions, CaptureStats, NetworkCapture, SelectOption } from '../types.js';
+import type {
+  CaptureOptions,
+  CaptureStats,
+  NetworkCapture,
+  SelectOption,
+} from '../types.js';
+import { logDebug, logError, logInfo, logWarn } from '../runtime-log.js';
 import {
   findFirstSelector,
   getHiddenFieldValue,
@@ -25,6 +31,7 @@ import { scrapeFromBootstrap } from './runner.js';
 import type {
   ProductRow,
   ScrapePageInfo,
+  ScrapeReplayResult,
   SweepLimits,
   SweepResumeCheckpoint,
   SweepResumeCursor,
@@ -371,7 +378,7 @@ function throwFreshTabResume(
   const prefix = input.logPrefix ? `${input.logPrefix} ` : '';
   const path = selectionPathLabel(selections) || '(unknown selection)';
   const line = `[${path}] ${cursor.reason}`;
-  console.warn(`${prefix}Fresh-tab resume requested: ${line}`);
+  logWarn(`${prefix}Fresh-tab resume requested: ${line}`);
   appendError(input.errorLogPath, `[resume] ${line}`);
   throw new SweepResumeRequiredError(cursor);
 }
@@ -384,23 +391,23 @@ async function recoverPage(
 ): Promise<boolean> {
   try {
     throwIfAborted(abortSignal, `${prefix}Page recovery aborted.`);
-    console.log(`${prefix}Recovering page after SSRS error (reloading report)...`);
+    logInfo(`${prefix}Recovering page after SSRS error (reloading report)...`);
     await page.goto(reportUrl, {
       waitUntil: 'domcontentloaded',
       timeout: 60_000,
     });
     const surface = await waitForReportSurface(page, 45_000, 15_000, abortSignal);
     if (!surface) {
-      console.error(`${prefix}Recovery failed: report surface not detected after reload.`);
+      logError(`${prefix}Recovery failed: report surface not detected after reload.`);
       return false;
     }
-    console.log(`${prefix}Page recovered, report surface ready.`);
+    logInfo(`${prefix}Page recovered, report surface ready.`);
     return true;
   } catch (error) {
     throwIfAborted(abortSignal, `${prefix}Page recovery aborted.`);
 
     const msg = error instanceof Error ? error.message : String(error);
-    console.error(`${prefix}Recovery failed: ${msg}`);
+    logError(`${prefix}Recovery failed: ${msg}`);
     return false;
   }
 }
@@ -419,7 +426,7 @@ async function reapplySelections(
 ): Promise<boolean> {
   try {
     throwIfSweepAborted(input, `${prefix}Selection re-apply aborted.`);
-    console.log(`${prefix}Re-applying selections after recovery...`);
+    logInfo(`${prefix}Re-applying selections after recovery...`);
 
     await ensureDropdownSelection(
       input.page,
@@ -465,13 +472,13 @@ async function reapplySelections(
       );
     }
 
-    console.log(`${prefix}Selections re-applied successfully.`);
+    logInfo(`${prefix}Selections re-applied successfully.`);
     return true;
   } catch (error) {
     throwIfSweepAborted(input, `${prefix}Selection re-apply aborted.`);
 
     const msg = error instanceof Error ? error.message : String(error);
-    console.error(`${prefix}Failed to re-apply selections: ${msg}`);
+    logError(`${prefix}Failed to re-apply selections: ${msg}`);
     return false;
   }
 }
@@ -494,13 +501,13 @@ function maybeLogSweepTelemetry(prefix: string, stats: SweepStats, input: SweepR
         ? 'unbounded'
         : `${formatMb(captureStats.maxBytes)}MB`;
 
-    console.log(
+    logDebug(
       `${prefix}[telemetry] combos=${stats.combinationsVisited} rss=${formatMb(memory.rss)}MB heap=${formatMb(memory.heapUsed)}MB captures=${captureStats.retainedCount}/${captureStats.maxItems} capBytes=${formatMb(captureStats.retainedBytes)}MB capLimit=${maxBytesText} dropped=${captureStats.droppedCount}`
     );
     return;
   }
 
-  console.log(
+  logDebug(
     `${prefix}[telemetry] combos=${stats.combinationsVisited} rss=${formatMb(memory.rss)}MB heap=${formatMb(memory.heapUsed)}MB`
   );
 }
@@ -596,7 +603,7 @@ async function ensureDropdownSelection(
       );
 
       if (result === 'timeout') {
-        console.warn(`${label}: no postback/state change detected, continuing.`);
+        logWarn(`${label}: no postback/state change detected, continuing.`);
       }
     } else {
       await sleepWithAbort(150, input.abortSignal, `${label}: selection aborted`);
@@ -713,7 +720,7 @@ function logOptions(
   prefix = ''
 ): void {
   const rule = startFromSecond ? 'start-from-second' : 'start-from-first';
-  console.log(
+  logDebug(
     `${prefix}${label}: options=${optionSet.all.length}, iterating=${optionSet.iterate.length} (${rule})`
   );
 }
@@ -730,7 +737,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
 
   if (input.storeCandidates) {
     storeCandidates = input.storeCandidates;
-    console.log(`${prefix}${sweepFields.store.label}: assigned=${storeCandidates.length}`);
+    logInfo(`${prefix}${sweepFields.store.label}: assigned=${storeCandidates.length}`);
   } else {
     const storeOptionSet = await resolveOptions(
       input.page,
@@ -765,7 +772,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
     if (!storeResume) {
       stats.storesProcessed += 1;
     }
-    console.log(`${prefix}Store selected: ${store.text}`);
+    logDebug(`${prefix}Store selected: ${store.text}`);
 
     await applyFixedFilters(input);
 
@@ -780,7 +787,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
     logOptions(sweepFields.department.label, departmentOptions, true, prefix);
 
     if (!departmentOptions.iterate.length) {
-      console.log(`${prefix}Skipping store ${store.text}: no departments to iterate.`);
+      logDebug(`${prefix}Skipping store ${store.text}: no departments to iterate.`);
       continue;
     }
 
@@ -867,7 +874,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
       logOptions(sweepFields.subdepartment.label, subdepartmentOptions, true, prefix);
 
       if (!subdepartmentOptions.iterate.length) {
-        console.log(
+        logDebug(
           `${prefix}Skipping ${store.text} > ${department.text}: no subdepartments to iterate.`
         );
         continue;
@@ -959,7 +966,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
         logOptions(sweepFields.commodity.label, commodityOptions, true, prefix);
 
         if (!commodityOptions.iterate.length) {
-          console.log(
+          logDebug(
             `${prefix}Skipping ${store.text} > ${department.text} > ${subdepartment.text}: no commodities to iterate.`
           );
           continue;
@@ -1041,7 +1048,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
 
             if (recoverableFamilyOptionsError) {
               const commodityLabel = `${store.text} > ${department.text} > ${subdepartment.text} > ${commodity.text}`;
-              console.warn(
+              logWarn(
                 `${prefix}Family options failed for ${commodity.text}, recovering before retry: ${familyOptionsMessage}`
               );
 
@@ -1138,7 +1145,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
           logOptions(sweepFields.family.label, familyOptions, true, prefix);
 
           if (!familyOptions.iterate.length) {
-            console.log(
+            logDebug(
               `${prefix}Skipping ${store.text} > ${department.text} > ${subdepartment.text} > ${commodity.text}: no families to iterate.`
             );
             continue;
@@ -1187,7 +1194,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
               stats.combinationsVisited += 1;
               stats.combinationsFailed += 1;
               const ghostLabel = `${store.text} > ${department.text} > ${subdepartment.text} > ${commodity.text} > ${familyCandidate.text}`;
-              console.warn(`${prefix}Skipping ghost/broken family: ${familyCandidate.text} — ${familyMsg}`);
+              logWarn(`${prefix}Skipping ghost/broken family: ${familyCandidate.text} — ${familyMsg}`);
               appendError(input.errorLogPath, `[ghost-family][family-select] ${ghostLabel}: ${familyMsg}`);
 
               const resumeAfterFamily = (reason: string): never => {
@@ -1214,7 +1221,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                   resumeAfterFamily(reason);
                 }
 
-                console.error(`${prefix}${reason}`);
+                logError(`${prefix}${reason}`);
                 break;
               }
 
@@ -1233,7 +1240,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                   resumeAfterFamily(reason);
                 }
 
-                console.error(`${prefix}Page recovery failed, skipping remaining families for ${commodity.text}.`);
+                logError(`${prefix}Page recovery failed, skipping remaining families for ${commodity.text}.`);
                 break;
               }
 
@@ -1248,7 +1255,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                   resumeAfterFamily(reason);
                 }
 
-                console.error(`${prefix}Re-apply failed, skipping remaining families for ${commodity.text}.`);
+                logError(`${prefix}Re-apply failed, skipping remaining families for ${commodity.text}.`);
                 break;
               }
 
@@ -1279,24 +1286,19 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
               try {
                 await ensureExpand(input);
 
-                let replayResult:
-                  | {
-                      pagesScraped: number[];
-                      totalRows: number;
-                    }
-                  | null = null;
+                let replayResult: ScrapeReplayResult | null = null;
 
                 for (let captureAttempt = 1; captureAttempt <= 2; captureAttempt += 1) {
                   throwIfSweepAborted(input);
 
                   const beforeCaptureCount = input.getCaptureCount();
                   await clickViewReport(input.page, actionTimeoutMs, input.abortSignal);
-                  console.log(`[${combo}] waiting for report render state...`);
+                  logDebug(`[${combo}] waiting for report render state...`);
 
                   await waitForReportPageState(
                     input.page,
                     Math.max(10_000, input.captureOptions.renderTimeoutMs),
-                    { requireEanHeader: false },
+                    undefined,
                     actionTimeoutMs,
                     input.abortSignal
                   );
@@ -1323,7 +1325,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                     if (fallbackCapture) {
                       selectedCapture = fallbackCapture;
                       selectedSource = 'network-usable-fallback';
-                      console.warn(
+                      logWarn(
                         `[${combo}] preferred payload missing, using fallback eventTarget=${fallbackCapture.eventTarget || 'n/a'}`
                       );
                     }
@@ -1333,7 +1335,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                     throw new Error('No usable network payload captured for current selection.');
                   }
 
-                  console.log(
+                  logDebug(
                     `[${combo}] payload source: ${selectedSource} (capture attempt ${captureAttempt}/2)`
                   );
 
@@ -1360,21 +1362,39 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                         );
                         stats.rowsWritten += written;
                         stats.pageRequests += 1;
-                        console.log(
+                        logDebug(
                           `[${combo}] page ${pageMeta.currentPage}/${pageMeta.totalPages}: appended ${written} rows`
                         );
                       },
                     }
                   );
 
-                  const suspiciousFallbackEmpty =
-                    selectedSource === 'network-usable-fallback' && replayResult.pagesScraped.length === 0;
+                  const replayReturnedNoRows = replayResult.totalRows === 0;
 
-                  if (suspiciousFallbackEmpty && captureAttempt < 2) {
-                    console.warn(
-                      `[${combo}] fallback payload produced empty report, retrying View Report once.`
+                  if (replayReturnedNoRows && replayResult.diagnostics.hasProductTableHeader) {
+                    const diagnostics = [
+                      `productHeader=${replayResult.diagnostics.hasProductTableHeader}`,
+                      `rowCandidates=${replayResult.diagnostics.rowCandidateCount}`,
+                      `debugResponse=${replayResult.diagnostics.debugResponsePath || '(none)'}`,
+                      `debugReportHtml=${replayResult.diagnostics.debugReportHtmlPath || '(none)'}`,
+                    ].join(', ');
+
+                    if (captureAttempt < 2) {
+                      logWarn(
+                        `[${combo}] replay response contains the product table header but parsed 0 rows, retrying View Report once. Diagnostics: ${diagnostics}`
+                      );
+                      continue;
+                    }
+
+                    throw new Error(
+                      `Replay response contains the product table header but parsed 0 rows. Diagnostics: ${diagnostics}`
                     );
-                    continue;
+                  }
+
+                  if (replayReturnedNoRows) {
+                    logInfo(
+                      `[${combo}] accepted empty report result. Replay diagnostics: productHeader=${replayResult.diagnostics.hasProductTableHeader}, rowCandidates=${replayResult.diagnostics.rowCandidateCount}`
+                    );
                   }
 
                   break;
@@ -1385,7 +1405,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                 }
 
                 stats.combinationsScraped += 1;
-                console.log(
+                logDebug(
                   `[${combo}] scraped pages=${replayResult.pagesScraped.length}, rows=${replayResult.totalRows}`
                 );
 
@@ -1422,7 +1442,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
 
                 const shouldRetry = combinationAttempt < 2 && isRetriableSweepError(message);
                 if (shouldRetry) {
-                  console.warn(
+                  logWarn(
                     `[${combo}] transient failure on attempt ${combinationAttempt}/2: ${message}`
                   );
                   await sleepWithAbort(750, input.abortSignal, `[${combo}] retry wait aborted`);
@@ -1442,7 +1462,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
             } else {
               stats.combinationsFailed += 1;
               const fullMessage = `[${combo}] ${finalErrorMessage}`;
-              console.error(`Combination failed: ${fullMessage}`);
+              logError(`Combination failed: ${fullMessage}`);
               appendError(input.errorLogPath, fullMessage);
 
               const recoverableFamilyFailure = isSkippableFamilyFailure(finalErrorMessage);
@@ -1478,12 +1498,12 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                     resumeAfterFamily(reason);
                   }
 
-                  console.error(`${prefix}${reason}`);
+                  logError(`${prefix}${reason}`);
                   break;
                 }
 
                 consecutiveRecoveries += 1;
-                console.warn(
+                logWarn(
                   `${prefix}Family render failed, recovering (${consecutiveRecoveries}/3)...`
                 );
                 await sleepWithAbort(
@@ -1504,7 +1524,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                     resumeAfterFamily(reason);
                   }
 
-                  console.error(
+                  logError(
                     `${prefix}Page recovery failed, skipping remaining families for ${commodity.text}.`
                   );
                   break;
@@ -1522,7 +1542,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
                     resumeAfterFamily(reason);
                   }
 
-                  console.error(
+                  logError(
                     `${prefix}Re-apply failed after recovery, skipping remaining families for ${commodity.text}.`
                   );
                   break;

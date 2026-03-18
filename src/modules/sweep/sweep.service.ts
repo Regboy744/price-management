@@ -40,7 +40,6 @@ function startMemoryTelemetry(input: {
   fs.mkdirSync(path.dirname(input.logPath), { recursive: true });
 
   const writeLine = (line: string): void => {
-    input.logger.info('Memory telemetry', { line });
     fs.appendFileSync(input.logPath, `${line}\n`, 'utf8');
   };
 

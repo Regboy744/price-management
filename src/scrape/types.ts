@@ -80,6 +80,12 @@ export interface ScrapeReplayResult {
   totalRows: number;
   pagesScraped: number[];
   rowsPerPage: Record<number, number>;
+  diagnostics: {
+    hasProductTableHeader: boolean;
+    rowCandidateCount: number;
+    debugResponsePath?: string;
+    debugReportHtmlPath?: string;
+  };
 }
 
 export interface ScrapeOptions {

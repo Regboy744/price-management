@@ -17,6 +17,46 @@ function saveDebugResponse(phase: string, responseData: string): string {
   return outputPath;
 }
 
+function saveDebugReportHtml(phase: string, reportHtml: string): string {
+  const outputPath = path.resolve('outputs', `debug-${phase}-report.html`);
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(outputPath, String(reportHtml || ''), 'utf8');
+  return outputPath;
+}
+
+const PRODUCT_TABLE_HEADER_PATTERN =
+  /\bEAN\/PLU\s+Root\s+Article\s+Code\s+LU\s+LV\s+SV\s+Code\s+Description\b/i;
+
+const PRODUCT_ROW_START_PATTERN = /\b\d{5,14}(?:\s+\d{6,8})?\s+[A-Z]{2,4}\s+\d+\s+\d+\s+/g;
+
+function collectProductRowStartIndices(text: string): number[] {
+  const rowStartIndices: number[] = [];
+  const pattern = new RegExp(PRODUCT_ROW_START_PATTERN);
+
+  let startMatch = pattern.exec(text);
+  while (startMatch !== null) {
+    rowStartIndices.push(startMatch.index);
+    startMatch = pattern.exec(text);
+  }
+
+  return rowStartIndices;
+}
+
+export function hasProductTableHeader(reportHtml: string): boolean {
+  return PRODUCT_TABLE_HEADER_PATTERN.test(toPlainText(reportHtml));
+}
+
+export function countProductRowCandidates(reportHtml: string): number {
+  return collectProductRowStartIndices(toPlainText(reportHtml)).length;
+}
+
+export function saveReplayDebugArtifacts(phase: string, responseData: string, reportHtml: string) {
+  return {
+    responsePath: saveDebugResponse(phase, responseData),
+    reportHtmlPath: saveDebugReportHtml(phase, reportHtml),
+  };
+}
+
 export function decodeHtmlEntities(text: string): string {
   return text
     .replace(/&nbsp;/g, ' ')
@@ -188,14 +228,7 @@ export function extractPageInfo(reportHtml: string, responseData: string): PageI
 
 export function extractProducts(reportHtml: string, pageNumber: number): ProductRow[] {
   const text = toPlainText(reportHtml);
-  const rowStartPattern = /\b\d{5,14}(?:\s+\d{6,8})?\s+[A-Z]{2,4}\s+\d+\s+\d+\s+/g;
-  const rowStartIndices: number[] = [];
-
-  let startMatch = rowStartPattern.exec(text);
-  while (startMatch !== null) {
-    rowStartIndices.push(startMatch.index);
-    startMatch = rowStartPattern.exec(text);
-  }
+  const rowStartIndices = collectProductRowStartIndices(text);
 
   const rows: ProductRow[] = [];
 

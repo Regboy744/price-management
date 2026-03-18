@@ -1,4 +1,5 @@
 import axios, { type AxiosResponse } from 'axios';
+import { logWarn } from '../runtime-log.js';
 import {
   isAbortError,
   sleepWithAbort,
@@ -99,7 +100,7 @@ export async function sendRequest(
 
       if (shouldRetry) {
         const backoffMs = retryDelayMs * attempt;
-        console.warn(
+        logWarn(
           `HTTP ${response.status} from SSRS request (attempt ${attempt}/${retries + 1}), retrying in ${backoffMs}ms...`
         );
         await sleepWithAbort(backoffMs, abortSignal, 'SSRS request aborted');
@@ -122,7 +123,7 @@ export async function sendRequest(
 
       const message = error instanceof Error ? error.message : String(error);
       const backoffMs = retryDelayMs * attempt;
-      console.warn(
+      logWarn(
         `HTTP request transient failure on attempt ${attempt}/${retries + 1}: ${message}. Retrying in ${backoffMs}ms...`
       );
       await sleepWithAbort(backoffMs, abortSignal, 'SSRS request aborted');

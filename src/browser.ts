@@ -3,6 +3,7 @@ import path from 'node:path';
 import { chromium } from 'playwright-core';
 import type { BrowserContext, Page, Request } from 'playwright-core';
 import { REPORT_VIEWER_PATH } from '../config/report.js';
+import { logDebug, logInfo, logWarn } from './runtime-log.js';
 import type { CaptureOptions, NetworkCapture, BrowserContext as AppBrowserContext } from './types.js';
 
 const DEFAULT_CAPTURE_MAX_ITEMS = 80;
@@ -108,12 +109,12 @@ export async function launchBrowser(options: CaptureOptions): Promise<BrowserCon
     fs.rmSync(baseUserDataDir, { recursive: true, force: true });
     launchUserDataDir = path.join(baseUserDataDir, `run-${Date.now()}-${process.pid}`);
     fs.mkdirSync(launchUserDataDir, { recursive: true });
-    console.log('Cleared browser profile root:', baseUserDataDir);
-    console.log('Created fresh browser profile:', launchUserDataDir);
+    logInfo(`Cleared browser profile root: ${baseUserDataDir}`);
+    logInfo(`Created fresh browser profile: ${launchUserDataDir}`);
   }
 
-  console.log('Launching Chrome:', options.chromePath, '| headless:', options.headless);
-  console.log('Profile path:', launchUserDataDir);
+  logInfo(`Launching Chrome: ${options.chromePath} | headless: ${options.headless}`);
+  logDebug(`Profile path: ${launchUserDataDir}`);
 
   const context = await chromium.launchPersistentContext(launchUserDataDir, {
     executablePath: options.chromePath,
@@ -133,7 +134,7 @@ export async function launchBrowser(options: CaptureOptions): Promise<BrowserCon
     ],
   });
 
-  console.log('Browser context launched.');
+  logInfo('Browser context launched.');
 
   return context;
 }
@@ -150,7 +151,7 @@ export function attachNetworkCapture(page: Page): AppBrowserContext {
   let captureGeneration = 0;
   let detached = false;
 
-  console.log(
+  logDebug(
     `Capture buffer limits: maxItems=${captureLimits.maxItems}, maxBytes=${
       captureLimits.maxBytes === Number.MAX_SAFE_INTEGER
         ? 'unbounded'
@@ -183,7 +184,7 @@ export function attachNetworkCapture(page: Page): AppBrowserContext {
 
     if (droppedCount > lastDropWarningAt && droppedCount % 25 === 0) {
       lastDropWarningAt = droppedCount;
-      console.warn(
+      logWarn(
         `Capture buffer trimmed: dropped=${droppedCount}, retained=${captures.length}, retainedMB=${(
           retainedBytes / 1024 / 1024
         ).toFixed(2)}`
@@ -246,17 +247,17 @@ export function attachNetworkCapture(page: Page): AppBrowserContext {
           retainedBytes += estimateCaptureBytes(capture);
           enforceLimits();
 
-          console.log(
+          logDebug(
             `[capture ${captureCount}] eventTarget=${capture.eventTarget || 'n/a'} currentPage=${capture.currentPage || 'n/a'} bodyLen=${body.length} retained=${captures.length}`
           );
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          console.warn('Capture async header warning:', message);
+          logWarn(`Capture async header warning: ${message}`);
         }
       })();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn('Capture parse warning:', message);
+      logWarn(`Capture parse warning: ${message}`);
     }
   };
 

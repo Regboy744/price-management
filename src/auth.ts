@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright-core';
+import { logDebug, logInfo, logWarn } from './runtime-log.js';
 import type { AuthSurfaceState, CaptureOptions } from './types.js';
 import { sleep } from './utils.js';
 
@@ -151,7 +152,7 @@ async function clickAndType(page: Page, selector: string, value: string): Promis
 /* ------------------------------------------------------------------ */
 
 async function doUsernameStep(page: Page, username: string): Promise<void> {
-  console.log('[auth] Step 1: waiting for username field #i0116...');
+  logDebug('[auth] Step 1: waiting for username field #i0116...');
 
   const found = await waitForElement(page, 'i0116', 15_000);
   if (!found) {
@@ -163,14 +164,14 @@ async function doUsernameStep(page: Page, username: string): Promise<void> {
   await sleep(500);
 
   const typed = await clickAndType(page, '#i0116', username);
-  console.log(`[auth] username typed: "${maskEmail(typed)}" (${typed.length} chars)`);
+  logDebug(`[auth] username typed: "${maskEmail(typed)}" (${typed.length} chars)`);
 
   if (typed !== username) {
-    console.log(`[auth] WARNING: typed value doesn't match expected. Retrying...`);
+    logWarn('[auth] username typed value did not match expected. Retrying...');
     // Clear and try once more
     await sleep(200);
     const retry = await clickAndType(page, '#i0116', username);
-    console.log(`[auth] retry typed: "${maskEmail(retry)}" (${retry.length} chars)`);
+    logDebug(`[auth] retry typed: "${maskEmail(retry)}" (${retry.length} chars)`);
     if (retry !== username) {
       const files = await dumpDebug(page, 'username-mismatch');
       throw new Error(`Username field value mismatch after retry. Got "${maskEmail(retry)}". Debug: ${files.join(', ')}`);
@@ -178,7 +179,7 @@ async function doUsernameStep(page: Page, username: string): Promise<void> {
   }
 
   // Click the Next button
-  console.log('[auth] clicking Next (#idSIButton9)...');
+  logDebug('[auth] clicking Next (#idSIButton9)...');
   await page.click('#idSIButton9').catch(() => null);
   await sleep(2_500);
 
@@ -192,7 +193,7 @@ async function doUsernameStep(page: Page, username: string): Promise<void> {
     throw new Error(`Username rejected by Microsoft: "${errorText}". Debug: ${files.join(', ')}`);
   }
 
-  console.log('[auth] Step 1 complete — username accepted.');
+  logDebug('[auth] Step 1 complete — username accepted.');
 }
 
 /* ------------------------------------------------------------------ */
@@ -226,14 +227,14 @@ async function waitForPasswordField(page: Page, timeoutMs: number): Promise<bool
 }
 
 async function doPasswordStep(page: Page, password: string): Promise<void> {
-  console.log('[auth] Step 2: waiting for password field...');
+  logDebug('[auth] Step 2: waiting for password field...');
 
   const ready = await waitForPasswordField(page, 15_000);
   if (!ready) {
     // Maybe there's a "switch to password" link
     const switchLink = await page.$('#idA_PWD_SwitchToPassword');
     if (switchLink) {
-      console.log('[auth] clicking "switch to password" link...');
+      logDebug('[auth] clicking "switch to password" link...');
       await switchLink.click();
       await sleep(1_500);
       const retryReady = await waitForPasswordField(page, 10_000);
@@ -253,7 +254,7 @@ async function doPasswordStep(page: Page, password: string): Promise<void> {
   const pwSelector = await page.$('#passwordInput') ? '#passwordInput' : '#i0118';
 
   const typed = await clickAndType(page, pwSelector, password);
-  console.log(`[auth] password typed (${typed.length} chars)`);
+  logDebug(`[auth] password typed (${typed.length} chars)`);
 
   if (!typed) {
     const files = await dumpDebug(page, 'password-empty');
@@ -261,11 +262,11 @@ async function doPasswordStep(page: Page, password: string): Promise<void> {
   }
 
   // Click Sign in
-  console.log('[auth] clicking Sign in (#idSIButton9)...');
+  logDebug('[auth] clicking Sign in (#idSIButton9)...');
   await page.click('#idSIButton9').catch(() => null);
   await sleep(3_000);
 
-  console.log('[auth] Step 2 complete — password submitted.');
+  logDebug('[auth] Step 2 complete — password submitted.');
 }
 
 /* ------------------------------------------------------------------ */
@@ -294,7 +295,7 @@ async function handleKmsiIfPresent(page: Page): Promise<void> {
     if (!hasKmsiRetry) return;
   }
 
-  console.log('[auth] KMSI prompt detected — clicking No...');
+  logInfo('[auth] KMSI prompt detected — clicking No...');
   await page.click('#idBtn_Back').catch(async () => {
     // Fallback: try the Yes button to just move past it
     await page.click('#idSIButton9').catch(() => null);
@@ -317,7 +318,7 @@ async function handleAccountPickerIfPresent(page: Page): Promise<boolean> {
 
   if (!hasTiles) return false;
 
-  console.log('[auth] account picker detected — clicking "Use another account"...');
+  logInfo('[auth] account picker detected — clicking "Use another account"...');
 
   // Try clicking "Use another account"
   const clicked = await page.click('#otherTile').catch(() => null);
@@ -352,16 +353,18 @@ export async function runAutomatedLogin(page: Page, options: CaptureOptions): Pr
     await page.bringToFront().catch(() => null);
   }
 
-  console.log('[auth] starting automated login...');
-  console.log('[auth] username:', maskEmail(options.username));
+  logInfo('[auth] starting automated login...');
+  logDebug(`[auth] username: ${maskEmail(options.username)}`);
 
   // Wait for page to load something meaningful
   let state = await waitForLoginOrReportSurface(page, 15_000);
-  console.log(`[auth] initial: host=${new URL(state.currentUrl).hostname} loginHost=${state.isLoginHost} report=${state.hasReportForm || state.hasReportViewerControl}`);
+  logDebug(
+    `[auth] initial: host=${new URL(state.currentUrl).hostname} loginHost=${state.isLoginHost} report=${state.hasReportForm || state.hasReportViewerControl}`
+  );
 
   // Already authenticated?
   if (hasReportSurface(state)) {
-    console.log('[auth] already authenticated.');
+    logInfo('[auth] already authenticated.');
     return;
   }
 
@@ -380,7 +383,7 @@ export async function runAutomatedLogin(page: Page, options: CaptureOptions): Pr
   // Check if we already reached the report
   state = await getAuthSurfaceState(page);
   if (hasReportSurface(state)) {
-    console.log('[auth] authenticated after username step (SSO).');
+    logInfo('[auth] authenticated after username step (SSO).');
     return;
   }
 
@@ -390,7 +393,7 @@ export async function runAutomatedLogin(page: Page, options: CaptureOptions): Pr
   // Check if we reached report
   state = await getAuthSurfaceState(page);
   if (hasReportSurface(state)) {
-    console.log('[auth] authenticated after password step.');
+    logInfo('[auth] authenticated after password step.');
     return;
   }
 
@@ -398,19 +401,19 @@ export async function runAutomatedLogin(page: Page, options: CaptureOptions): Pr
   await handleKmsiIfPresent(page);
 
   // Final wait for report surface (redirects can take time)
-  console.log('[auth] waiting for report surface after login...');
+  logInfo('[auth] waiting for report surface after login...');
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     state = await getAuthSurfaceState(page);
     if (hasReportSurface(state)) {
-      console.log('[auth] authenticated — report surface detected.');
+      logInfo('[auth] authenticated — report surface detected.');
       return;
     }
 
     // Handle any late KMSI prompt
     const kmsi = await page.$('#idBtn_Back');
     if (kmsi) {
-      console.log('[auth] late KMSI prompt — clicking No...');
+      logInfo('[auth] late KMSI prompt — clicking No...');
       await kmsi.click().catch(() => null);
       await sleep(2_000);
       continue;

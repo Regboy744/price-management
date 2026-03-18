@@ -5,6 +5,7 @@ import { sweepFields } from '../../config/sweep.js';
 import { attachNetworkCapture } from '../browser.js';
 import { getSelectOptions, waitForDropdownEnabled } from '../dom.js';
 import { waitForReportSurface } from '../report.js';
+import { logDebug, logError, logInfo, logWarn } from '../runtime-log.js';
 import type { CaptureOptions } from '../types.js';
 import {
   isAbortError,
@@ -120,13 +121,13 @@ function attachPageDiagnostics(
   const onPageError = (error: Error): void => {
     const message = error?.message || String(error);
     const logLine = `${storeLabel}: pageerror: ${message}`;
-    console.error(logLine);
+    logError(logLine);
     appendError(errorLogPath, logLine);
   };
 
   const onCrash = (): void => {
     const logLine = `${storeLabel}: page crashed.`;
-    console.error(logLine);
+    logError(logLine);
     appendError(errorLogPath, logLine);
   };
 
@@ -170,11 +171,11 @@ async function discoverStores(
     throw new Error('Store dropdown has no selectable options.');
   }
 
-  console.log(`Discovered ${stores.length} stores.`);
+  logInfo(`Discovered ${stores.length} stores.`);
 
   if (maxStores !== null && maxStores > 0) {
     const limited = stores.slice(0, maxStores);
-    console.log(`Limited to ${limited.length} stores (--max-stores ${maxStores}).`);
+    logInfo(`Limited to ${limited.length} stores (--max-stores ${maxStores}).`);
     return limited;
   }
 
@@ -235,7 +236,7 @@ async function processStore(
       const openLabel = resumeAfter
         ? `${storeLabel}: opening new tab (attempt ${attempt}/${maxAttempts}, resume ${resumeCount + 1}/${maxFreshTabResumes})...`
         : `${storeLabel}: opening new tab (attempt ${attempt}/${maxAttempts})...`;
-      console.log(openLabel);
+      logDebug(openLabel);
 
       let page: Page | undefined;
       let captureContext: ReturnType<typeof attachNetworkCapture> | null = null;
@@ -245,7 +246,7 @@ async function processStore(
           return;
         }
 
-        console.warn(`${storeLabel}: abort received, closing tab...`);
+        logWarn(`${storeLabel}: abort received, closing tab...`);
         void Promise.race([
           page.close().catch(() => null),
           sleep(PAGE_CLOSE_TIMEOUT_MS),
@@ -277,7 +278,7 @@ async function processStore(
           getCaptureStats,
         } = captureContext;
 
-        console.log(`${storeLabel}: navigating to report...`);
+        logDebug(`${storeLabel}: navigating to report...`);
         await page.goto(captureOptions.reportUrl, {
           waitUntil: 'domcontentloaded',
           timeout: 120_000,
@@ -293,7 +294,7 @@ async function processStore(
           throw new Error(`${storeLabel}: could not detect report surface.`);
         }
 
-        console.log(
+        logDebug(
           `${storeLabel}: report surface ready, starting sweep${
             resumeAfter ? ` (${formatResumeCursor(resumeAfter)})` : ''
           }...`
@@ -328,7 +329,7 @@ async function processStore(
 
         const captureStats = getCaptureStats();
 
-        console.log(
+        logInfo(
           `${storeLabel}: completed. combinations=${stats.combinationsScraped}, rows=${stats.rowsWritten}, failed=${stats.combinationsFailed}, droppedCaptures=${captureStats.droppedCount}, resumes=${resumeCount}`
         );
 
@@ -341,7 +342,7 @@ async function processStore(
       } catch (error) {
         if (abortSignal?.aborted || isAbortError(error)) {
           const message = toAbortError(abortSignal?.reason ?? error, abortFallbackMessage).message;
-          console.error(`${storeLabel}: ABORTED — ${message}`);
+          logError(`${storeLabel}: ABORTED — ${message}`);
           appendError(errorLogPath, `${storeLabel}: aborted: ${message}`);
           return {
             storeName: store.text,
@@ -358,7 +359,7 @@ async function processStore(
 
           if (resumeCount > maxFreshTabResumes) {
             const message = `${storeLabel}: exceeded fresh-tab resumes (${maxFreshTabResumes}) — ${error.message}`;
-            console.error(message);
+            logError(message);
             appendError(errorLogPath, message);
             return {
               storeName: store.text,
@@ -370,7 +371,7 @@ async function processStore(
           }
 
           const resumeMessage = `${storeLabel}: reopening fresh tab to resume after ${formatResumeCursor(resumeAfter)} (${resumeCount}/${maxFreshTabResumes})`;
-          console.warn(resumeMessage);
+          logWarn(resumeMessage);
           appendError(errorLogPath, resumeMessage);
           await sleepWithAbort(1_000, abortSignal, abortFallbackMessage);
           continue;
@@ -379,14 +380,14 @@ async function processStore(
         const message = error instanceof Error ? error.message : String(error);
         const retryable = attempt < maxAttempts && isRetriableStoreError(message);
 
-        console.error(`${storeLabel}: FAILED (attempt ${attempt}/${maxAttempts}) — ${message}`);
+        logError(`${storeLabel}: FAILED (attempt ${attempt}/${maxAttempts}) — ${message}`);
         appendError(
           errorLogPath,
           `${storeLabel}: attempt ${attempt}/${maxAttempts} failed: ${message}`
         );
 
         if (retryable) {
-          console.warn(`${storeLabel}: retrying with a fresh tab...`);
+          logWarn(`${storeLabel}: retrying with a fresh tab...`);
           await csvAppender.close().catch(() => null);
           fs.rmSync(csvPath, { force: true });
           csvAppender = createProductsCsvAppender(csvPath);
@@ -418,7 +419,7 @@ async function processStore(
         }
 
         if (page) {
-          console.log(`${storeLabel}: closing tab...`);
+          logDebug(`${storeLabel}: closing tab...`);
           await Promise.race([
             page.close().catch(() => null),
             sleep(PAGE_CLOSE_TIMEOUT_MS),
@@ -437,7 +438,7 @@ async function processStore(
   } catch (error) {
     if (abortSignal?.aborted || isAbortError(error)) {
       const message = toAbortError(abortSignal?.reason ?? error, abortFallbackMessage).message;
-      console.error(`${storeLabel}: ABORTED — ${message}`);
+      logError(`${storeLabel}: ABORTED — ${message}`);
       appendError(errorLogPath, `${storeLabel}: aborted: ${message}`);
       return {
         storeName: store.text,
@@ -535,7 +536,7 @@ export async function runParallelSweep(
   const stores = input.storeCandidates ?? (await discoverStores(input.initialPage, input.limits.maxStores));
 
   if (input.storeCandidates) {
-    console.log(`Parallel sweep: assigned ${stores.length} requested stores.`);
+    logInfo(`Parallel sweep: assigned ${stores.length} requested stores.`);
   }
 
   await input.initialPage.goto('about:blank').catch(() => null);
@@ -561,8 +562,8 @@ export async function runParallelSweep(
   const effectiveTabs = Math.min(Math.max(1, maxTabs), stores.length);
   const staggerMs = readParallelTabStaggerMs();
 
-  console.log(`Parallel sweep: ${stores.length} stores, ${effectiveTabs} concurrent tabs.`);
-  console.log(`Parallel tab stagger: ${staggerMs}ms`);
+  logInfo(`Parallel sweep: ${stores.length} stores, ${effectiveTabs} concurrent tabs.`);
+  logDebug(`Parallel tab stagger: ${staggerMs}ms`);
 
   const allResults: ParallelStoreResult[] = [];
 
@@ -571,7 +572,7 @@ export async function runParallelSweep(
     const batchNum = Math.floor(batchStart / effectiveTabs) + 1;
     const totalBatches = Math.ceil(stores.length / effectiveTabs);
 
-    console.log(
+    logInfo(
       `Batch ${batchNum}/${totalBatches}: processing ${batch.length} stores (${batch.map((s) => s.text).join(', ')})`
     );
 
@@ -603,11 +604,11 @@ export async function runParallelSweep(
         allResults.push(result.value);
       } else {
         const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
-        console.error(`Unexpected batch failure: ${reason}`);
+        logError(`Unexpected batch failure: ${reason}`);
       }
     }
 
-    console.log(`Batch ${batchNum}/${totalBatches}: completed.`);
+    logInfo(`Batch ${batchNum}/${totalBatches}: completed.`);
   }
 
   return {

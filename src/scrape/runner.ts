@@ -1,6 +1,14 @@
 import { eventTargets } from '../../config/ssrs.js';
 import { sleepWithAbort, throwIfAborted } from '../utils.js';
-import { extractPageInfo, extractProducts, extractReportHtml, extractStates } from './parser.js';
+import {
+  countProductRowCandidates,
+  extractPageInfo,
+  extractProducts,
+  extractReportHtml,
+  extractStates,
+  hasProductTableHeader,
+  saveReplayDebugArtifacts,
+} from './parser.js';
 import { buildNavigationBody } from './pagination.js';
 import { sendRequest } from './request.js';
 import type {
@@ -95,6 +103,10 @@ export async function scrapeFromBootstrap(
         totalRows: 0,
         pagesScraped: [],
         rowsPerPage: {},
+        diagnostics: {
+          hasProductTableHeader: false,
+          rowCandidateCount: 0,
+        },
       };
     }
     throw error;
@@ -102,6 +114,8 @@ export async function scrapeFromBootstrap(
 
   let pageInfo = extractPageInfo(reportHtml, responseData.data);
   let states = extractStates(responseData.data);
+  let firstPageResponseData = pageInfo.currentPage === 1 ? responseData.data : '';
+  let firstPageReportHtml = pageInfo.currentPage === 1 ? reportHtml : '';
   responseData = { status: 0, data: '' };
 
   while (pageInfo.currentPage > 1) {
@@ -118,6 +132,10 @@ export async function scrapeFromBootstrap(
     reportHtml = extractReportHtml(responseData.data, `${hooks.phasePrefix || 'bootstrap'}-previous-page`);
     pageInfo = extractPageInfo(reportHtml, responseData.data);
     states = extractStates(responseData.data);
+    if (pageInfo.currentPage === 1) {
+      firstPageResponseData = responseData.data;
+      firstPageReportHtml = reportHtml;
+    }
     responseData = { status: 0, data: '' };
   }
 
@@ -125,11 +143,21 @@ export async function scrapeFromBootstrap(
   const rowsPerPage: Record<number, number> = {};
   const rows: ProductRow[] | null = collectRows ? [] : null;
   let totalRows = 0;
+  let hasRenderedProductTableHeader = false;
+  let rowCandidateCount = 0;
 
   while (true) {
     throwIfAborted(abortSignal, 'Scrape replay aborted');
 
+    const pageHasProductTableHeader = hasProductTableHeader(reportHtml);
+    const pageRowCandidateCount = countProductRowCandidates(reportHtml);
     const currentRows = extractProducts(reportHtml, pageInfo.currentPage);
+    hasRenderedProductTableHeader = hasRenderedProductTableHeader || pageHasProductTableHeader;
+    rowCandidateCount += pageRowCandidateCount;
+
+    if (!firstPageReportHtml && pageInfo.currentPage === 1) {
+      firstPageReportHtml = reportHtml;
+    }
     const pageMeta: ScrapePageInfo = {
       currentPage: pageInfo.currentPage,
       totalPages: pageInfo.totalPages,
@@ -182,10 +210,29 @@ export async function scrapeFromBootstrap(
 
   reportHtml = '';
 
+  let debugResponsePath: string | undefined;
+  let debugReportHtmlPath: string | undefined;
+
+  if (totalRows === 0 && hasRenderedProductTableHeader && firstPageResponseData && firstPageReportHtml) {
+    const debugArtifacts = saveReplayDebugArtifacts(
+      `${hooks.phasePrefix || 'bootstrap'}-zero-rows-with-product-header`,
+      firstPageResponseData,
+      firstPageReportHtml
+    );
+    debugResponsePath = debugArtifacts.responsePath;
+    debugReportHtmlPath = debugArtifacts.reportHtmlPath;
+  }
+
   return {
     rows: rows || [],
     totalRows,
     pagesScraped: Array.from(pagesVisited).sort((a, b) => a - b),
     rowsPerPage,
+    diagnostics: {
+      hasProductTableHeader: hasRenderedProductTableHeader,
+      rowCandidateCount,
+      debugResponsePath,
+      debugReportHtmlPath,
+    },
   };
 }

@@ -6,6 +6,7 @@ import type {
   ReportPageState,
   ReportSurfaceState,
 } from './types.js';
+import { logDebug } from './runtime-log.js';
 import {
   resolveBrowserActionTimeoutMs,
   sleepWithAbort,
@@ -13,7 +14,7 @@ import {
   TimedActionError,
   withTimeout,
 } from './utils.js';
-import { REPORT_CONTENT_MARKERS, VISIBILITY_STATE_SELECTOR } from '../config/report.js';
+import { REPORT_CONTENT_MARKERS } from '../config/report.js';
 import { getHiddenFieldValue, waitForPostbackOrStateChange } from './dom.js';
 
 export async function waitForReportSurface(
@@ -79,68 +80,51 @@ export async function waitForReportPageState(
   page: Page,
   timeoutMs: number,
   options?: {
-    requireEanHeader?: boolean;
     requireReportTitle?: boolean;
   },
   actionTimeoutMs = 15_000,
   abortSignal?: AbortSignal
 ): Promise<ReportPageState> {
   const start = Date.now();
-  const { title, header } = REPORT_CONTENT_MARKERS;
-  const requireEanHeader = options?.requireEanHeader ?? true;
+  const { title } = REPORT_CONTENT_MARKERS;
   const requireReportTitle = options?.requireReportTitle ?? true;
 
   let lastState: ReportPageState = {
     visibilityState: '',
     pageUrl: '',
     hasReportTitle: false,
-    hasEanHeader: false,
   };
 
   while (Date.now() - start < timeoutMs) {
     throwIfAborted(abortSignal, 'Report render wait aborted');
 
     const state = await withTimeout(
-      page.evaluate(
-        ([titleMarker, headerMarker]: [string, string]) => {
-          const field = document.querySelector(
-            'input[name="ReportViewerControl$ctl09$VisibilityState$ctl00"]'
-          ) as HTMLInputElement | null;
+      page.evaluate((titleMarker: string) => {
+        const field = document.querySelector(
+          'input[name="ReportViewerControl$ctl09$VisibilityState$ctl00"]'
+        ) as HTMLInputElement | null;
 
-          // Use the visible report content area first — the rendered report
-          // title and data table headers live inside #ReportViewerControl_ctl09
-          // (specifically its VisibleReportContent child), while _ReportArea
-          // is a sibling that mostly holds hidden-field state.
-          const reportScope =
-            document.querySelector('#VisibleReportContentReportViewerControl_ctl09') ||
-            document.querySelector('#ReportViewerControl_ctl09') ||
-            document.querySelector('#ReportViewerControl_ctl09_ReportArea') ||
-            document.querySelector('#ReportViewerControl') ||
-            document.body;
+        const reportScope =
+          document.querySelector('#VisibleReportContentReportViewerControl_ctl09') ||
+          document.querySelector('#ReportViewerControl_ctl09') ||
+          document.querySelector('#ReportViewerControl_ctl09_ReportArea') ||
+          document.querySelector('#ReportViewerControl') ||
+          document.body;
 
-          let hasReportTitle = false;
-          let hasEanHeader = false;
+        let hasReportTitle = false;
 
-          if (reportScope) {
-            // Collect all text under reportScope and normalize whitespace so
-            // that markers split across multiple text nodes or containing
-            // newlines/extra spaces are still matched correctly.
-            const rawText = reportScope.textContent || '';
-            const normalizedText = rawText.replace(/\s+/g, ' ');
+        if (reportScope) {
+          const rawText = reportScope.textContent || '';
+          const normalizedText = rawText.replace(/\s+/g, ' ');
+          hasReportTitle = normalizedText.includes(titleMarker);
+        }
 
-            hasReportTitle = normalizedText.includes(titleMarker);
-            hasEanHeader = normalizedText.includes(headerMarker);
-          }
-
-          return {
-            visibilityState: field ? field.value : '',
-            pageUrl: window.location.href,
-            hasReportTitle,
-            hasEanHeader,
-          };
-        },
-        [title, header] as [string, string]
-      ),
+        return {
+          visibilityState: field ? field.value : '',
+          pageUrl: window.location.href,
+          hasReportTitle,
+        };
+      }, title),
       actionTimeoutMs,
       () => new TimedActionError('Read report page state', actionTimeoutMs)
     ).catch((error): ReportPageState => {
@@ -152,7 +136,6 @@ export async function waitForReportPageState(
         visibilityState: '',
         pageUrl: '',
         hasReportTitle: false,
-        hasEanHeader: false,
       };
     });
 
@@ -163,9 +146,8 @@ export async function waitForReportPageState(
     }
 
     const titleSatisfied = !requireReportTitle || state.hasReportTitle;
-    const headerSatisfied = !requireEanHeader || state.hasEanHeader;
 
-    if (state.visibilityState === 'ReportPage' && titleSatisfied && headerSatisfied) {
+    if (state.visibilityState === 'ReportPage' && titleSatisfied) {
       return state;
     }
 
@@ -174,13 +156,11 @@ export async function waitForReportPageState(
 
   const expectedMarkers: string[] = [];
   if (requireReportTitle) expectedMarkers.push(title);
-  if (requireEanHeader) expectedMarkers.push(header);
 
   const markerText = expectedMarkers.length > 0 ? expectedMarkers.join(' and ') : 'ReportPage state';
   const diag = [
     `visibilityState=${lastState.visibilityState || '(empty)'}`,
     `hasTitle=${lastState.hasReportTitle}`,
-    `hasEan=${lastState.hasEanHeader}`,
     `url=${lastState.pageUrl || '(unknown)'}`,
   ].join(', ');
 
@@ -379,7 +359,7 @@ export async function ensurePreferredCapture(
   const forcedAsyncRetries = Math.max(0, Math.floor(options.forcedAsyncRetries));
 
   if (preferredCaptureTimeoutMs > 0) {
-    console.log(
+    logDebug(
       `Waiting up to ${preferredCaptureTimeoutMs}ms for preferred ctl09 network payload capture...`
     );
   }
@@ -407,7 +387,7 @@ export async function ensurePreferredCapture(
   for (let attempt = 1; attempt <= forcedAsyncRetries; attempt++) {
     throwIfAborted(abortSignal, 'Preferred capture resolution aborted');
 
-    console.log(
+    logDebug(
       `Preferred ctl09 payload not captured yet. Forcing reserved async postback (${attempt}/${forcedAsyncRetries})...`
     );
 
@@ -420,7 +400,7 @@ export async function ensurePreferredCapture(
       abortSignal
     );
     forcedAsyncResults.push(result);
-    console.log(`Forced reserved async postback result: ${result}`);
+    logDebug(`Forced reserved async postback result: ${result}`);
 
     const asyncCaptureWaitMs = Math.max(500, Math.floor(options.preferredCaptureTimeoutMs));
     preferred = await waitForPreferredNetworkCapture(

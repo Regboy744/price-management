@@ -5,7 +5,6 @@ export const REPORT_VIEWER_PATH = '/ReportServer/Pages/ReportViewer.aspx';
 
 export const REPORT_CONTENT_MARKERS = {
   title: 'Standard Article Report (R0001)',
-  header: 'EAN/PLU',
 } as const;
 
 export const VISIBILITY_STATE_SELECTOR =

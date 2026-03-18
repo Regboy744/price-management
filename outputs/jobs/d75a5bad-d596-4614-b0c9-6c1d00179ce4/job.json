@@ -1,0 +1,27 @@
+{
+  "id": "d75a5bad-d596-4614-b0c9-6c1d00179ce4",
+  "type": "scrape",
+  "status": "running",
+  "createdAt": "2026-03-18T21:03:47.741Z",
+  "input": {
+    "headless": true,
+    "autoLogin": true,
+    "password": "[REDACTED]",
+    "stores": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5"
+    ],
+    "parallel": true,
+    "maxParallelTabs": 5
+  },
+  "artifacts": {
+    "jobDirectory": "/app/outputs/jobs/d75a5bad-d596-4614-b0c9-6c1d00179ce4",
+    "snapshotPath": "/app/outputs/jobs/d75a5bad-d596-4614-b0c9-6c1d00179ce4/job.json",
+    "logPath": "/app/outputs/jobs/d75a5bad-d596-4614-b0c9-6c1d00179ce4/job.log",
+    "files": []
+  },
+  "startedAt": "2026-03-18T21:03:47.741Z"
+}

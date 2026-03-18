@@ -64,7 +64,6 @@ export interface ReportPageState {
   visibilityState: string;
   pageUrl: string;
   hasReportTitle: boolean;
-  hasEanHeader: boolean;
 }
 
 export interface ReportSurfaceState {
