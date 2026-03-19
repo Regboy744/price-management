@@ -1,0 +1,128 @@
+{
+  "id": "1242ccb2-35d4-47e8-9963-3e3cf4b56346",
+  "type": "scrape",
+  "status": "completed",
+  "createdAt": "2026-03-19T20:39:06.951Z",
+  "input": {
+    "headless": true,
+    "autoLogin": true,
+    "password": "[REDACTED]",
+    "stores": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5"
+    ],
+    "parallel": true,
+    "maxParallelTabs": 5
+  },
+  "artifacts": {
+    "jobDirectory": "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346",
+    "snapshotPath": "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/job.json",
+    "logPath": "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/job.log",
+    "files": [
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/job.log",
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/logs/debug.log",
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/logs/error.log",
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/logs/info.log",
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/logs/warn.log",
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/memory-metrics.log",
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/scrape-all-errors.log",
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/stores/store-1025-pearse-st-o-leary.csv",
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/stores/store-1740-centra-point-campus.csv",
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/stores/store-241-rialto-o-leary.csv",
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/stores/store-441-camden-st-o-leary.csv",
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/stores/store-628-charlemont-street-o-leary.csv",
+      "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/sweep-summary.json"
+    ]
+  },
+  "startedAt": "2026-03-19T20:39:06.952Z",
+  "finishedAt": "2026-03-19T23:20:11.144Z",
+  "result": {
+    "mode": "parallel",
+    "stats": {
+      "storesProcessed": 0,
+      "combinationsVisited": 0,
+      "combinationsScraped": 0,
+      "combinationsFailed": 0,
+      "rowsWritten": 0,
+      "pageRequests": 0
+    },
+    "outputDirectory": "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/stores",
+    "errorLogPath": "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/scrape-all-errors.log",
+    "memoryLogPath": "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/memory-metrics.log",
+    "storeResults": [
+      {
+        "storeName": "241 - RIALTO - O'LEARY",
+        "storeValue": "1",
+        "csvPath": "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/stores/store-241-rialto-o-leary.csv",
+        "stats": {
+          "storesProcessed": 0,
+          "combinationsVisited": 0,
+          "combinationsScraped": 0,
+          "combinationsFailed": 0,
+          "rowsWritten": 0,
+          "pageRequests": 0
+        },
+        "error": "browserContext.newPage: Target page, context or browser has been closed"
+      },
+      {
+        "storeName": "441 - CAMDEN ST - O'LEARY",
+        "storeValue": "2",
+        "csvPath": "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/stores/store-441-camden-st-o-leary.csv",
+        "stats": {
+          "storesProcessed": 0,
+          "combinationsVisited": 0,
+          "combinationsScraped": 0,
+          "combinationsFailed": 0,
+          "rowsWritten": 0,
+          "pageRequests": 0
+        },
+        "error": "browserContext.newPage: Target page, context or browser has been closed"
+      },
+      {
+        "storeName": "628 - CHARLEMONT STREET - O'LEARY",
+        "storeValue": "3",
+        "csvPath": "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/stores/store-628-charlemont-street-o-leary.csv",
+        "stats": {
+          "storesProcessed": 0,
+          "combinationsVisited": 0,
+          "combinationsScraped": 0,
+          "combinationsFailed": 0,
+          "rowsWritten": 0,
+          "pageRequests": 0
+        },
+        "error": "browserContext.newPage: Target page, context or browser has been closed"
+      },
+      {
+        "storeName": "1025 - PEARSE ST - O'LEARY",
+        "storeValue": "4",
+        "csvPath": "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/stores/store-1025-pearse-st-o-leary.csv",
+        "stats": {
+          "storesProcessed": 0,
+          "combinationsVisited": 0,
+          "combinationsScraped": 0,
+          "combinationsFailed": 0,
+          "rowsWritten": 0,
+          "pageRequests": 0
+        },
+        "error": "browserContext.newPage: Target page, context or browser has been closed"
+      },
+      {
+        "storeName": "1740 - CENTRA POINT CAMPUS",
+        "storeValue": "5",
+        "csvPath": "/app/outputs/jobs/1242ccb2-35d4-47e8-9963-3e3cf4b56346/stores/store-1740-centra-point-campus.csv",
+        "stats": {
+          "storesProcessed": 0,
+          "combinationsVisited": 0,
+          "combinationsScraped": 0,
+          "combinationsFailed": 0,
+          "rowsWritten": 0,
+          "pageRequests": 0
+        },
+        "error": "browserContext.newPage: Target page, context or browser has been closed"
+      }
+    ]
+  }
+}

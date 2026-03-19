@@ -824,6 +824,40 @@ async function ensureDropdownSelection(
   };
 }
 
+async function ensureDropdownSelectionWithRetry(
+  page: Page,
+  input: SweepRunInput,
+  selector: string,
+  label: string,
+  targetValue: string,
+  waitForPostback: boolean,
+  maxRetries: number = 3,
+  retryDelayMs: number = 1000
+): Promise<SweepOption> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await ensureDropdownSelection(page, input, selector, label, targetValue, waitForPostback);
+    } catch (error) {
+      throwIfSweepAborted(input, `${label}: selection aborted`);
+
+      const message = error instanceof Error ? error.message : String(error);
+      const isRetryable = isResumeSelectionError(error);
+      const shouldRetry = attempt < maxRetries && isRetryable;
+
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      const backoffMs = retryDelayMs * attempt;
+      logWarn(`${label}: transient failure on attempt ${attempt}/${maxRetries}: ${message}. Retrying in ${backoffMs}ms...`);
+      await sleepWithAbort(backoffMs, input.abortSignal, `${label}: retry wait aborted`);
+    }
+  }
+
+  // Should not reach here, but TypeScript needs this
+  throw new Error(`${label}: exhausted all ${maxRetries} retries`);
+}
+
 async function applyFixedFilters(input: SweepRunInput): Promise<void> {
   await ensureDropdownSelection(
     input.page,
@@ -1006,7 +1040,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
       let department: SweepOption;
 
       try {
-        department = await ensureDropdownSelection(
+        department = await ensureDropdownSelectionWithRetry(
           input.page,
           input,
           sweepFields.department.selector,
@@ -1095,7 +1129,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
         let subdepartment: SweepOption;
 
         try {
-          subdepartment = await ensureDropdownSelection(
+          subdepartment = await ensureDropdownSelectionWithRetry(
             input.page,
             input,
             sweepFields.subdepartment.selector,
@@ -1187,7 +1221,7 @@ export async function runCascadedSweep(input: SweepRunInput): Promise<SweepStats
           let commodity: SweepOption;
 
           try {
-            commodity = await ensureDropdownSelection(
+            commodity = await ensureDropdownSelectionWithRetry(
               input.page,
               input,
               sweepFields.commodity.selector,
